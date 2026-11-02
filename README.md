@@ -20,7 +20,6 @@ No ads. No telemetry. No HappyTV servers. Your sign-in never leaves the TV excep
 
 HappyTV started as a personal project: one household, one living room, one remote, and a provider with more than 20,000 channels. The goal was a TV app that a grandparent can use without a lesson and that never makes anyone wait. It signs in to your Xtream Codes provider, keeps a local copy of the channels, movies, shows and TV guide, and plays them.
 
-It is built for the D-pad. If the remote cannot reach it, it does not exist.
 
 > [!IMPORTANT]
 > HappyTV is a player. It hosts, sells and provides **no content** of any kind. You bring your own Xtream Codes subscription that you are entitled to use. See the [legal note](#legal-note).
