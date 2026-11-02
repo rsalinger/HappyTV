@@ -4,6 +4,7 @@
 
 <br>
 
+[![Downloads](https://img.shields.io/github/downloads/rsalinger/HappyTV/total?label=downloads&color=FF7A45&logo=github)](https://github.com/rsalinger/HappyTV/releases)
 ![Platform](https://img.shields.io/badge/platform-Android%20TV%20%7C%20Google%20TV-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF?logo=kotlin&logoColor=white)
 ![Compose for TV](https://img.shields.io/badge/Jetpack%20Compose-for%20TV-4285F4?logo=jetpackcompose&logoColor=white)
