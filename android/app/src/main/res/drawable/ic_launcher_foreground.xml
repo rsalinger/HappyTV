@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HappyTV adaptive icon foreground: the "Sunset screen" TV. 108 dp canvas, art inside the 66 dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- TV frame -->
+    <path
+        android:fillColor="#2A1810"
+        android:pathData="M37,30H71A10,10 0,0 1,81 40V60A10,10 0,0 1,71 70H37A10,10 0,0 1,27 60V40A10,10 0,0 1,37 30Z" />
+
+    <!-- Sky -->
+    <path
+        android:fillColor="#3A2230"
+        android:pathData="M38,35H70A6,6 0,0 1,76 41V59A6,6 0,0 1,70 65H38A6,6 0,0 1,32 59V41A6,6 0,0 1,38 35Z" />
+
+    <!-- Sun -->
+    <path
+        android:fillColor="#FF7A45"
+        android:pathData="M42,53A12,12 0,0 1,66 53Z" />
+
+    <!-- Water -->
+    <path
+        android:fillColor="#1F1218"
+        android:pathData="M32,53H76V59A6,6 0,0 1,70 65H38A6,6 0,0 1,32 59Z" />
+
+    <!-- Reflections -->
+    <path
+        android:strokeColor="#FF7A45"
+        android:strokeAlpha="0.7"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M44,57.5H64" />
+    <path
+        android:strokeColor="#FF7A45"
+        android:strokeAlpha="0.45"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M48,61.5H60" />
+
+    <!-- Stand -->
+    <path
+        android:strokeColor="#2A1810"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M47,77H61" />
+</vector>

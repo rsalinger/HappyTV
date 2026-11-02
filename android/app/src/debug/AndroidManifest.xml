@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds only (this file lives in src/debug and never reaches a release
+  manifest).
+
+  LoginActivity is the only exported entry point in this app. It routes a
+  launcher start to the dashboard when credentials are stored (issue #30) and
+  otherwise shows the sign-in form; "adb shell am start" can force the form
+  by passing the boolean extra com.rysal.happytv.extra.SHOW_SIGN_IN = true.
+  Nothing else is reachable without handling a secret on the wire.
+  Re-exporting the two playback screens here lets automation open them
+  directly:
+
+      adb shell am start -n com.rysal.happytv/.ui.browse.LiveTvActivity
+      adb shell am start -n com.rysal.happytv/.ui.player.PlayerActivity
+
+  Issue #20: every export below requires android.permission.DUMP, a
+  signature|privileged|development permission the shell uid (adb) holds and
+  third-party apps cannot obtain, so only `adb shell am start` (or root) can
+  start them. The app's own uid is always allowed, so in-app navigation is
+  unchanged. What each export is for:
+    LiveTvActivity     QA / perf: open Live TV directly (acceptance scripts).
+    PlayerActivity     QA: open the player directly with intent extras.
+    LiveTvPerfAlias    F-42 perf harness: same target as LiveTvActivity under
+                       a separate name.
+  The INJECT_CREDENTIALS receiver is registered in code and guarded the same
+  way (see AdbLoginInjection). Release and benchmark builds contain none of
+  this: this file is merged only into the debug variant.
+
+  No production behaviour changes: the flags only decide who may start the
+  activity, and only in the debug variant that QA installs over adb.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <activity
+            android:name=".ui.browse.LiveTvActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            tools:replace="android:exported" />
+        <activity
+            android:name=".ui.player.PlayerActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            tools:replace="android:exported" />
+        <!--
+          F-42 perf harness: re-export LiveTvActivity under a separate alias
+          name so on-device frame profiling can launch Live TV directly from
+          `adb shell am start` without inheriting the launcher task's focus /
+          affinity quirks. Behaviourally identical to the LiveTvActivity export
+          above — both target the same activity.
+        -->
+        <activity-alias
+            android:name=".ui.browse.LiveTvPerfAlias"
+            android:targetActivity=".ui.browse.LiveTvActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:enabled="true" />
+    </application>
+</manifest>

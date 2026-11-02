@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Networking -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Playback foreground service + keeping the screen on while watching -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- targetSdk 34 requires the typed FGS permission for media playback -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- WorkManager's SystemForegroundService (dataSync) runs the guide refresh
+         as a foreground service below API 31 (#200); API 34 needs the typed permission -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Channel-reminder alarms (wired up when reminders ship, v1.5+) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Runtime notification permission (v1.5+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- TV: leanback is optional (installable on phones too), touchscreen not required -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <application
+        android:name=".HappyTvApp"
+        android:allowBackup="true"
+        android:backupAgent=".backup.HappyTvBackupAgent"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:fullBackupOnly="true"
+        android:banner="@drawable/tv_banner"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.HappyTv">
+
+        <!-- Sign-in: the launcher entry point (phone + TV leanback). Its theme
+             is the 200 ms splash flash (Theme.HappyTv.Splash). -->
+        <activity
+            android:name=".ui.login.LoginActivity"
+            android:exported="true"
+            android:theme="@style/Theme.HappyTv.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Main host: the dashboard. Launched after login; singleTask so
+             re-entering the app from the launcher never stacks a duplicate.
+             The dashboard keeps the default configChanges set. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
+
+        <!-- Live TV destination (t_01bb0d5a). Two-pane categories + channels;
+             hosts the browse NavHost at route `live_tv`. F-58: singleTop so a
+             rapid double-press from the dashboard never stacks a second
+             instance whose NavHost can race the first's `handleDeepLink`. -->
+        <activity
+            android:name=".ui.browse.LiveTvActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden|uiMode|locale|layoutDirection|fontScale|density" />
+
+        <!-- Movies (t_01bb0d5a): categories -> poster grid -> details. Hosts the
+             same browse NavHost at `catalog/movies`. F-58: singleTop; the
+             observed crash was a duplicate MoviesActivity on top of itself
+             whose NavHost ran `findStartDestination` against an empty graph
+             and threw `NoSuchElementException: Sequence is empty`. -->
+        <activity
+            android:name=".ui.browse.MoviesActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
+
+        <!-- Settings (t_7d608d3c): two panes, changes save right away. -->
+        <activity
+            android:name=".ui.settings.SettingsActivity"
+            android:exported="false"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
+
+        <!-- Search (t_7d608d3c): a modal overlay — the screen behind stays
+             visible through the translucent window and its 70% scrim. -->
+        <activity
+            android:name=".ui.search.SearchActivity"
+            android:exported="false"
+            android:theme="@style/Theme.HappyTv.Search"
+            android:windowSoftInputMode="stateVisible|adjustPan"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
+
+        <!-- Shows (t_01bb0d5a): categories -> poster grid -> show details (v1
+             holding page). Hosts the same browse NavHost at `catalog/shows`.
+             F-58: singleTop for the same duplicate-launch reason as Movies. -->
+        <activity
+            android:name=".ui.browse.ShowsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
+
+        <!-- Player: Media3. configChanges keeps the player alive across
+             screen/keyboard changes; no foreground service in v1 (see
+             PlayerActivity — background audio is scheduled for v1.5).
+             Picture-in-picture was removed (#28): Home and screen-off stop
+             playback through PlayerLifecycle. -->
+        <activity
+            android:name=".ui.player.PlayerActivity"
+            android:exported="false"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
+
+
+        <!-- WorkManager's own foreground service declares no type; API 34 rejects
+             startForeground(dataSync) unless the manifest names it (#200). -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+    </application>
+
+</manifest>

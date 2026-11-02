@@ -1,0 +1,27 @@
+# App-owned baseline profile (#35, #52). Library profiles (Compose, Room, Media3...) are merged
+# by AGP from the dependencies; this covers the app's own start, dashboard, Live TV and guide
+# paths. Wildcards keep it valid across refactors; R8 mappings are applied at build time.
+HSPLcom/rysal/happytv/**;->**(**)**
+Lcom/rysal/happytv/**;
+
+# Live TV Guide view (the default view) and guide scrolling (#52): the grid, its rows and
+# blocks, the focus helper and the shared surfaces a row is built from. Already inside the
+# app wildcard above; listed so the intent survives anyone narrowing that rule.
+HSPLcom/rysal/happytv/ui/guide/**;->**(**)**
+HSPLcom/rysal/happytv/ui/browse/**;->**(**)**
+HSPLcom/rysal/happytv/ui/focus/**;->**(**)**
+HSPLcom/rysal/happytv/ui/theme/**;->**(**)**
+HSPLcom/rysal/happytv/data/guide/**;->**(**)**
+HSPLcom/rysal/happytv/data/dao/**;->**(**)**
+
+# Library paths a guide row runs through on every D-pad move: the lazy list, focus
+# targets/requesters, key events, and text layout.
+HSPLandroidx/compose/foundation/lazy/**;->**(**)**
+HSPLandroidx/compose/ui/focus/**;->**(**)**
+HSPLandroidx/compose/ui/input/key/**;->**(**)**
+HSPLandroidx/compose/ui/text/**;->**(**)**
+HSPLandroidx/compose/foundation/text/**;->**(**)**
+HSPLandroidx/compose/material3/Text**;->**(**)**
+Landroidx/compose/foundation/lazy/**;
+Landroidx/compose/ui/focus/**;
+Landroidx/compose/ui/text/**;

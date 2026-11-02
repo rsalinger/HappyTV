@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Splash icon: the app mark on its cream card, for the Android 12+ splash
+  (design spec §"Screens: splash" — the 192 px icon with 22 % corners on Ground).
+
+  Only used as `windowSplashScreenAnimatedIcon`, where the system draws it at
+  288 dp and masks the centre to a circle. Pre-12 devices never see this: they
+  fall back to the activity theme's windowBackground (a Ground-coloured
+  flash), which is what the launcher showed before the SplashScreen API.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Icon background: cream, corners 22 % of the 192 px master ≈ 42 dp. -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/ic_launcher_background" />
+            <corners android:radius="42dp" />
+        </shape>
+    </item>
+
+    <!-- The "Sunset screen" TV, foreground layer of the adaptive icon. -->
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+
+</layer-list>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme for the Compose-only app: no AppCompat/Material XML widgets,
+         just a window shell. Actual styling happens in Compose (MaterialTheme). -->
+    <style name="Theme.HappyTv" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/colorPrimary</item>
+        <item name="android:colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="android:colorAccent">@color/colorAccent</item>
+        <item name="android:windowBackground">@color/windowBackground</item>
+        <!-- Phone only: a dark status bar reads on the Ground background. On
+             TV the system ignores it (there is no status bar to tint). -->
+        <item name="android:statusBarColor">@color/surface_ground</item>
+    </style>
+
+    <!-- Search is a modal overlay (design spec §"Screens: search"): its window is
+         translucent so the screen that opened it stays visible behind the
+         overlay's own 70% scrim. No window preview either — the flash of a
+         Ground-coloured window would defeat the whole effect. -->
+    <style name="Theme.HappyTv.Search" parent="Theme.HappyTv">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- Launcher flash (design spec §"Screens: splash" + final-polish task C3):
+         Android 12+ gets the SplashScreen API with the brand mark on Ground
+         for a 200 ms flash, kept on screen by LoginActivity until it elapses.
+         Pre-12 backports the same theme and falls back to its windowBackground
+         — a Ground-coloured flash, i.e. exactly the launcher theme the app
+         shipped with before the API existed. -->
+    <style name="Theme.HappyTv.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/surface_ground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="windowSplashScreenAnimationDuration">200</item>
+        <item name="android:windowBackground">@color/surface_ground</item>
+        <item name="postSplashScreenTheme">@style/Theme.HappyTv</item>
+    </style>
+</resources>

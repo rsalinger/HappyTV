@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Cleartext HTTP: PERMITTED, and deliberately so. Full reasoning, because
+    "allow cleartext globally" normally deserves a fight.
+
+    The design (design spec "Sign in > Unencrypted-server sheet") requires that a
+    plain-`http://` provider still works after the user explicitly accepts the
+    risk: the sheet's "Continue anyway" button signs in over http, and that
+    path must genuinely connect. The obvious defence — a per-host allow-list
+    in this file — is impossible: this XML is compiled into the APK and the
+    platform never re-reads it at runtime, and NetworkSecurityPolicy has NO
+    public setter for cleartext (an earlier plan to call
+    setCleartextTrafficPermitted(host, true) after the sheet was based on an
+    API that does not exist publicly). A static file cannot know
+    `provider.example` before the user types it.
+
+    So the per-host gate lives app-side, where it can see the user's answer:
+
+      - LoginViewModel.attempt() sends nothing over `http://` until
+        CleartextConsentStore holds an answer for that hostname. The first
+        Sign-in raises the sheet; the answer is remembered per host.
+        "Never skip this sheet silently" is enforced by unit tests
+        (LoginViewModelTest.submit_httpUrl_neverAnswered_raisesSheet_*).
+      - The sheet is the only writer of consent.
+
+    Trust anchors stay system-only below, so cleartext-permitted does NOT also
+    mean "trust user-installed CAs", and TLS traffic is unaffected by this
+    flag. If a future build ever needs the stricter posture (e.g. a global
+    "block cleartext" switch in Settings), flip base-config back to false and
+    decide then what http-only providers get — with the sheet in mind.
+
+    On API 23 this file is ignored entirely and cleartext is allowed anyway,
+    so v1's posture matches the oldest supported device already.
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- Deliberate: the sheet is the per-host gate, see comment above. -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

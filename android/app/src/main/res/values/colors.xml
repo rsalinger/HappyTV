@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HappyTV — Direction C "Sunset screen" design tokens.
+  Source of truth: ui/theme/Tokens.kt (see docs/DESIGN.md "Color").
+  All hex values copied verbatim from the original design spec.
+
+  Naming convention:
+    brand_*        = literal palette colors from the icon system
+    surface_*      = warm-dark neutrals for the Compose theme
+    text_*         = warm-cream text on dark fills
+    accent_*       = the sunset orange and on-accent text
+    state_*        = success / error / stale and their tinted backgrounds
+-->
+<resources>
+
+    <!-- ===================== Brand colors (from the app icon) ===================== -->
+
+    <!-- Cream — Icon background, launcher banner background, adaptive icon background. -->
+    <color name="brand_cream">#FFF1E2</color>
+
+    <!-- Espresso — TV frame and stand in the icon; "Happy" in the banner wordmark. -->
+    <color name="brand_espresso">#2A1810</color>
+
+    <!-- Dusk — The sky on the icon's TV screen. -->
+    <color name="brand_dusk">#3A2230</color>
+
+    <!-- Water — Below the horizon on the icon's TV screen. -->
+    <color name="brand_water">#1F1218</color>
+
+    <!-- Sun — The sun and its two reflections; same value as the UI accent. -->
+    <color name="brand_sun">#FF7A45</color>
+
+    <!-- Banner TV — Sun at 70% brightness, reads on cream (4.5:1 for 40 px ExtraBold). -->
+    <color name="brand_banner_tv">#B35530</color>
+
+    <!-- ===================== Surfaces, back to front ===================== -->
+
+    <color name="surface_ground">#13100E</color>
+    <color name="surface_surface">#1C1815</color>
+    <color name="surface_raised">#26211D</color>
+    <color name="surface_overlay">#302A25</color>
+    <!-- Accent tint: accent 14% over Ground, written rgba(255, 122, 69, 0.14). -->
+    <color name="surface_accent_tint">#341F16</color>
+    <color name="surface_line">#453D36</color>
+    <color name="surface_loading">#2B2521</color>
+    <color name="surface_guide_gridline">#1E1A17</color>
+    <!-- Guide no-data stripe pair, 135° at 14 px bands. -->
+    <color name="surface_guide_no_data_a">#17130F</color>
+    <color name="surface_guide_no_data_b">#1C1815</color>
+    <color name="surface_player_black">#000000</color>
+    <color name="surface_sign_in_watermark">#191512</color>
+
+    <!-- ===================== Translucent layers (design spec) ===================== -->
+
+    <!-- Fade at the bottom of scrolling screens: Ground 0 → Ground 85%. -->
+    <color name="surface_scroll_fade_start">#0013100E</color>
+    <color name="surface_scroll_fade_end">#D913100E</color>
+    <!-- Poster title strip: rgba(10, 8, 7, 0) → rgba(10, 8, 7, 0.92) at 50%. -->
+    <color name="surface_poster_strip_start">#000A0807</color>
+    <color name="surface_poster_strip_end">#EB0A0807</color>
+    <!-- Poster badges: rgba(19, 16, 14, 0.88). -->
+    <color name="surface_poster_badge">#E113100E</color>
+    <!-- Guide details progress track: rgba(255, 255, 255, 0.12). -->
+    <color name="surface_guide_details_track">#1FFFFFFF</color>
+    <!-- Scrim behind search (over the dashboard): rgba(0, 0, 0, 0.70). -->
+    <color name="scrim_search">#B3000000</color>
+    <!-- Fade at the bottom of search: rgba(10, 8, 7, 0) → rgba(10, 8, 7, 0.95). -->
+    <color name="surface_search_fade_start">#000A0807</color>
+    <color name="surface_search_fade_end">#F20A0807</color>
+
+    <!-- ===================== Text and icons ===================== -->
+
+    <color name="text_primary">#FFF1E2</color>
+    <color name="text_secondary">#CFC6BD</color>
+    <color name="text_tertiary">#93877C</color>
+    <color name="text_disabled_icon">#5E554D</color>
+    <!-- On accent: dark text/icon on the orange fills (luminance > 0.18). -->
+    <color name="text_on_accent">#1A0F0A</color>
+
+    <!-- ===================== Accent ===================== -->
+    <!-- Sunset orange — focus ring, tile icons, primary buttons, progress bars, etc. -->
+    <color name="accent_sunset">#FF7A45</color>
+
+    <!-- ===================== State colors ===================== -->
+
+    <color name="state_success">#5CC98F</color>
+    <color name="state_error">#F2666B</color>
+    <color name="state_stale">#F2B544</color>
+    <!-- Error tint: rgba(242, 102, 107, 0.14) over Ground. -->
+    <color name="state_error_tint">#321C1B</color>
+    <!-- Stale tint: rgba(242, 181, 68, 0.16) over Surface. -->
+    <color name="state_stale_tint">#3E311D</color>
+    <!-- Success tint: rgba(92, 201, 143, 0.16). -->
+    <color name="state_success_tint">#1E3A2C</color>
+
+    <!-- ===================== Light mode (#126) =====================
+         Mirrors LightPalette in ui/theme/HappyTvTheme.kt. The window background
+         and splash stay dark; the Compose canvas covers them in light mode. -->
+
+    <color name="light_ground">#F6EFE7</color>
+    <color name="light_surface">#FFFAF4</color>
+    <color name="light_raised">#FFFFFF</color>
+    <color name="light_overlay">#ECE2D7</color>
+    <color name="light_line">#D6C8BA</color>
+    <color name="light_text_primary">#2A1810</color>
+    <color name="light_text_secondary">#5A4A3F</color>
+    <color name="light_text_tertiary">#706055</color>
+    <color name="light_text_on_accent">#FFFFFF</color>
+    <!-- Deepened sunset orange: 3:1 or better against the light surfaces. -->
+    <color name="light_accent">#C2410C</color>
+
+    <!-- ===================== Material attribute aliases =====================
+         themes.xml references these legacy attributes so the Android window
+         shell (splash/system bars) matches the Compose MaterialTheme.
+         Compose code is free to consume brand_* / surface_* / accent_* directly. -->
+
+    <color name="colorPrimary">@color/brand_sun</color>
+    <color name="colorPrimaryDark">@color/brand_dusk</color>
+    <color name="colorOnPrimary">@color/text_on_accent</color>
+    <color name="colorAccent">@color/brand_sun</color>
+
+    <color name="colorSecondary">@color/brand_sun</color>
+    <color name="colorOnSecondary">@color/brand_espresso</color>
+
+    <color name="windowBackground">@color/surface_ground</color>
+
+    <!-- Adaptive-icon background = cream, from the Sunset screen icon. -->
+    <color name="ic_launcher_background">@color/brand_cream</color>
+
+</resources>

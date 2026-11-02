@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #19: Android 11 and older (android:fullBackupContent). Include-only: the one
+     household file is the whole backup. The Room database, the encrypted
+     sign-in prefs, the consent store, the guide cache and the settings
+     DataStore are all left out by default, and so is anything added later. -->
+<full-backup-content>
+    <include domain="file" path="household_backup.json" />
+</full-backup-content>

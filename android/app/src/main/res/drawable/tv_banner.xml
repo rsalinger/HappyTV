@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Manifest expects @drawable/tv_banner; the designer ships the Direction C
+  banner PNG as drawable/banner.png. Alias here to keep the manifest reference
+  stable across icon swaps.
+-->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/banner"
+    android:gravity="fill" />
