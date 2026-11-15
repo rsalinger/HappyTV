@@ -130,6 +130,19 @@ class RefreshCoordinatorTest {
         assertNotNull(cachedUserInfo)
     }
 
+    /** #212: the plain DataStore blob never carries the username or password. */
+    @Test
+    fun login_andRefresh_cacheUserInfoWithoutCredentials() = runBlocking {
+        assertTrue(coordinator.login("panel.example", 8080, false, "user42", "s3cret") is LoginResult.Success)
+        coordinator.refreshAll()
+
+        val cached = settings.settings.first().userInfo!!.decodeToString()
+        assertFalse(cached.contains("s3cret"))
+        assertFalse(cached.contains("user42"))
+        assertFalse(cached.contains("password"))
+        assertTrue(cached.contains("m3u8"))
+    }
+
     /** #19: the restore import hook runs after a successful sign-in only, and cannot fail it. */
     @Test
     fun login_runsTheAfterSignInStepOnlyOnSuccess_andItsFailureDoesNotFailTheLogin() = runBlocking {
@@ -407,6 +420,22 @@ class RefreshCoordinatorTest {
         assertEquals(3, db.liveStreamDao().count())
     }
 
+    @Test
+    fun signOut_runsTheOnSignOutCleanup() = runBlocking {
+        var ran = 0
+        val c = RefreshCoordinator(
+            database = db,
+            settings = settings,
+            credentials = credentials,
+            api = api,
+            io = Dispatchers.Unconfined,
+            clockUtcMillis = { FIXED_CLOCK },
+            onSignOut = { ran++ },
+        )
+        c.signOut()
+        assertEquals(1, ran)
+    }
+
     /** The household's choices plus a stale catalog row and a guide row. */
     private suspend fun seedChoicesAndStaleCatalog() {
         db.liveStreamDao().insertAll(listOf(
@@ -587,7 +616,10 @@ class RefreshCoordinatorTest {
 private class FakeXtreamApi : XtreamApi {
 
     var loginResponse = LoginResponse(
-        user_info = UserInfoDto(username = "user42", auth = "1", status = "Active"),
+        user_info = UserInfoDto(
+            username = "user42", password = "s3cret", auth = "1", status = "Active", message = "Hi user42",
+            allowed_output_formats = listOf("m3u8", "ts"),
+        ),
         server_info = ServerInfoDto(url = "panel.example", port = "8080"),
     )
 

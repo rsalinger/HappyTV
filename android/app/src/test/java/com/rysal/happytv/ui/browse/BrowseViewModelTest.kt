@@ -310,11 +310,9 @@ class BrowseViewModelTest {
     }
 
     @Test
-    fun `favorites keep channel-number order, which has no ordering contract`() = runTest {
-        // F-56's fix is deliberately scoped to RecentlyWatched. Favorites
-        // carries no order (its ids are a Set, and no design text promises one),
-        // so the pane keeps listing it in channel-number order — pin that here
-        // so the recents fix can't quietly spread into a behaviour change.
+    fun `favorites list in the user's order, new ones at the bottom, not in channel-number order`() = runTest {
+        // #221: Favorites has an order of its own. The channels are starred 201, 101, 102, so that
+        // is the order shown, and it is not channel-number order (the old behaviour).
         viewModel.toggleFavorite("201")
         viewModel.toggleFavorite("101")
         viewModel.toggleFavorite("102")
@@ -324,7 +322,7 @@ class BrowseViewModelTest {
             it.selectedSelection is LiveCategorySelection.Favorites &&
                 it.channels.size == 3
         }
-        assertEquals(listOf("101", "102", "201"), state.channels.map { it.stream.id })
+        assertEquals(listOf("201", "101", "102"), state.channels.map { it.stream.id })
     }
 
     @Test

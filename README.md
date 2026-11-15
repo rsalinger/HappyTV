@@ -80,7 +80,7 @@ Press Right past the edge of the two-hour window and the guide moves forward in 
 
 ### Favorites and recently watched
 
-Long-press OK on a channel, category, poster or dashboard tile to open its menu: star it, hide it, or refresh it. Starred channels live in Favorites and the last channels you watched are in Recently watched, both pinned at the top of the category rail. Hidden items can be shown again from Settings.
+Long-press OK on a channel, category, poster or dashboard tile to open its menu: star it, hide it, or refresh it. Starred channels live in Favorites and the last channels you watched are in Recently watched, both pinned at the top of the category rail. Hold OK on a favorite and choose Reorder channels to put them in your own order. Hidden items can be shown again from Settings.
 
 ### Movies and Shows
 
@@ -107,7 +107,7 @@ Stop a movie or an episode halfway and HappyTV remembers. The next time, the but
 
 ### A player that gets out of the way
 
-Built on Media3 and ExoPlayer, with live, movie and replay modes. The controls come up with OK and go away by themselves. OK only reveals them and never pauses, so you can open program info or pick a subtitle without stopping the show. Live shows Now and Next; a track panel lists audio and subtitles.
+Built on Media3 and ExoPlayer, with live, movie and replay modes. The controls come up with OK and go away by themselves. OK only reveals them and never pauses, so you can open program info or pick a subtitle without stopping the show. Live shows Now and Next; a track panel lists audio and subtitles. While a live channel plays full screen, Up and Down change the channel, and with the controls open Down brings up the last channels you watched. The screen stays on while video plays.
 
 <p align="center">
   <img src="docs/screenshots/player-live-info.png" alt="The player with program info on a live channel" width="49%">
@@ -116,7 +116,7 @@ Built on Media3 and ExoPlayer, with live, movie and replay modes. The controls c
 
 ### Search
 
-Search opens as an overlay from the dashboard or any browse screen. On Live TV, Movies and Shows it searches that type. Results appear after a short pause, grouped as channels, movies and shows, and every word you type has to match. It uses the system keyboard.
+Search opens as an overlay from the dashboard or any browse screen. On Live TV, Movies and Shows it searches that type. Results appear after a short pause, grouped as channels, movies and shows, and every word you type has to match. Hold OK on a result to star it without leaving Search. It uses the system keyboard.
 
 <p align="center">
   <img src="docs/screenshots/search.png" alt="Search results grouped into channels, movies and shows" width="100%">
@@ -124,10 +124,16 @@ Search opens as an overlay from the dashboard or any browse screen. On Live TV, 
 
 ### Settings
 
-One screen, two panes: sections on the left, that section's rows on the right. Account, Refresh, Live TV, Guide, Hidden items, Player and About. Every change saves immediately; there is no Save button.
+One screen, two panes: sections on the left, that section's rows on the right. Account, Refresh, Live TV, Guide, Hidden items, Player, Backup and About. Every change saves immediately; there is no Save button.
+
+Backup saves your favorites, hidden items and settings to a file on the TV or a USB drive, and Restore brings them back, on the same TV or another one. The file holds no sign-in details.
 
 <p align="center">
   <img src="docs/screenshots/settings.png" alt="Settings with sections on the left and options on the right" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-backup.png" alt="Settings &gt; Backup: back up now, restore and automatic Google backup" width="100%">
 </p>
 
 ### Light and dark
@@ -166,7 +172,8 @@ Providers can have tens of thousands of channels and over a hundred thousand mov
 
 - **No ads, no telemetry, no analytics, no accounts.** HappyTV has no server of its own.
 - **No HappyTV cloud.** Your lists, favorites, history and settings live on the TV. HappyTV has no server to send them to.
-- **One optional backup, through Android.** "Back up favorites and history" (Settings, Account; on by default) puts one small file in the TV's own Android backup, which Google stores in the Google account the TV is signed in to. A reset or replacement TV can then bring back your favorites, hidden items, recently watched, resume points and non-secret settings after you sign in again. The file names items only by the provider's ID numbers. It never contains your server address, username, password or any link, and the sign-in details and the rest of the app's data are excluded from backup entirely. Turn the switch off and the next backup carries nothing from HappyTV.
+- **Backups you control.** Settings > Backup can save your favorites, hidden items and settings to a file on the TV or a USB drive, and restore from one. "Automatic Google backup" (on by default) also puts one small file in the TV's own Android backup, which Google stores in the Google account the TV is signed in to, so a reset or replacement TV can bring your lists back after you sign in again. Both name items only by the provider's ID numbers. Neither contains your server address, username, password or any link, and the sign-in details and the rest of the app's data are excluded from backup entirely. Turn the switch off and the next Android backup carries nothing from HappyTV.
+- **Crash reports stay on the TV.** If HappyTV crashes, it writes a short report on the device with addresses and sign-in details removed. Nothing is uploaded. Settings > About shows the last crash and can copy the reports to the TV's HappyTV folder or a USB drive if you want to share one.
 - **Credentials are encrypted** with a key held in the Android Keystore (EncryptedSharedPreferences). They are used only to talk to your provider.
 - **Plain HTTP needs your consent.** A server typed without a scheme uses HTTPS. If you really need plain HTTP, HappyTV asks first and says why.
 - **No picture-in-picture, no background playback.** Home and screen-off stop playback.
@@ -253,11 +260,11 @@ If your device can decode it. The player uses the device's own decoders. When on
 
 ### Is there picture-in-picture?
 
-No. Back from full-screen live TV shrinks the video into a preview inside Live TV and keeps it playing. Home and screen-off stop playback. In Settings, Player, "Back while watching" can stop playback on Back instead.
+No. Back from full-screen live TV shrinks the video into a preview inside Live TV and keeps it playing. Home and screen-off stop playback. In Settings > Player, "Back while watching" can stop playback on Back instead.
 
 ### Does it send anything to you or anyone else?
 
-Not to us: there is no analytics, no crash reporting and no HappyTV account. Network traffic goes to your own provider, plus the guide and artwork addresses it hands out. The one other thing is Android's own backup: while "Back up favorites and history" is on, a small file of favorites, history and settings goes to the Google account the TV is signed in to. It holds no sign-in details. See [Privacy](#privacy).
+Not to us: there is no analytics, no crash upload and no HappyTV account. Crash reports are written on the TV and stay there unless you copy them off yourself. Network traffic goes to your own provider, plus the guide and artwork addresses it hands out. The one other thing is Android's own backup: while "Automatic Google backup" is on, a small file of favorites, history and settings goes to the Google account the TV is signed in to. It holds no sign-in details. See [Privacy](#privacy).
 
 ### Can I use more than one provider?
 

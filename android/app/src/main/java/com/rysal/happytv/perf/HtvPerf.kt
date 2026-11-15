@@ -27,6 +27,7 @@ object HtvPerf {
     const val PLAYER_BACK_PREVIEW = "player.back.preview"
     const val PLAYER_BACK_GAP = "player.back.gap"
     const val PLAYER_ZAP = "player.zap"
+    const val PLAYER_CHANNEL_STEP = "player.channel.step"
     /** Next episode requested (button or countdown end) to its first frame rendered (#84). */
     const val PLAYER_NEXT_EPISODE = "player.next.episode"
     /** First scrubber press of a burst to its single seekTo; detail `presses=N` (#102). */
@@ -35,6 +36,8 @@ object HtvPerf {
     const val CATALOG_OPEN = "catalog.open"
     const val CATALOG_CATEGORY = "catalog.category"
     const val SHOW_EPISODES = "show.episodes"
+    /** OK on a poster to the details page's first content (the cached row), #240. */
+    const val DETAILS_OPEN = "details.open"
 
     private val starts = ConcurrentHashMap<String, Long>()
 

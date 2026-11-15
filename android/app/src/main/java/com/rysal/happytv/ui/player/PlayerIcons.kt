@@ -55,6 +55,24 @@ object PlayerIcons {
         }
     }
 
+    /** Down chevron (recent channels hint). */
+    val ChevronDown: ImageVector by lazy {
+        stroked("HappyTV Chevron down", strokeWidth = 2.25f) {
+            moveTo(5.5f, 9f)
+            lineTo(12f, 15.5f)
+            lineTo(18.5f, 9f)
+        }
+    }
+
+    /** Up chevron ("Show controls" on the recent channels row). */
+    val ChevronUp: ImageVector by lazy {
+        stroked("HappyTV Chevron up", strokeWidth = 2.25f) {
+            moveTo(5.5f, 15f)
+            lineTo(12f, 8.5f)
+            lineTo(18.5f, 15f)
+        }
+    }
+
     /** Favorite, off — star outline (24–56 px everywhere favorites appear). */
     val StarOutline: ImageVector by lazy {
         stroked("HappyTV Star", strokeWidth = 1.5f) {

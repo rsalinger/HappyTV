@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flatMapLatest
@@ -117,39 +118,57 @@ class CatalogViewModel(
 
     private val isMovies: Boolean get() = streamType == StreamType.VOD
 
+    /**
+     * Details (a [streamId]) reads only [detail], [episodes], [episodeMarks] and the star; the
+     * grid, rail and count flows below are for the poster-grid screens. On details they start
+     * only if something collects them, so opening a title no longer scans and sorts the whole
+     * catalog table, counts it by category and keeps those queries alive (#240).
+     */
+    private val gridFlowsStart: SharingStarted =
+        if (streamId == null) SharingStarted.Eagerly else SharingStarted.WhileSubscribed(5_000)
+
     /** Visible categories for this catalog (`isHidden = 0`). */
     val categories: StateFlow<List<Category>> = categoryDao.observeVisible(streamType)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(viewModelScope, gridFlowsStart, emptyList())
 
     /** Every category including hidden ones, (the selection label reads names from it). */
     val allCategories: StateFlow<List<Category>> = categoryDao.observeAll(streamType)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(viewModelScope, gridFlowsStart, emptyList())
 
     /** `{categoryId → item count}` — the cells' "1,204 movies" line. */
     val categoryCounts: StateFlow<Map<String, Int>> =
         (if (isMovies) vodStreamDao.observeCounts() else seriesStreamDao.observeCounts())
             .toCountMap()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+            .stateIn(viewModelScope, gridFlowsStart, emptyMap())
 
     /** Total for the headers ("8,214 movies · 63 categories"). */
     val totalItems: StateFlow<Int> =
         (if (isMovies) vodStreamDao.observeCount() else seriesStreamDao.observeCount())
-            .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+            .stateIn(viewModelScope, gridFlowsStart, 0)
 
     /** Titles in progress; null before the first read tells "none" from "not known yet". */
     private val continueCountOrNull: StateFlow<Int?> = continueRows(CONTINUE_CAP)
         .map<List<ContinueRow>, Int?> { it.size }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(viewModelScope, gridFlowsStart, null)
 
     /** How many titles Continue watching holds; the rail lists the row only when this is above 0. */
     val continueCount: StateFlow<Int> = continueCountOrNull
         .map { it ?: 0 }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+        .stateIn(viewModelScope, gridFlowsStart, 0)
 
     /** `{id → favourited}` for the poster badges and the details star. */
     val favoriteIds: StateFlow<Set<String>> = favoriteDao.observeForType(streamType)
         .map { rows -> rows.map { it.streamId }.toSet() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    /**
+     * #235: true only once the favorites table is known to be empty for this type. Starts false
+     * ("not answered yet"), unlike [favoriteIds]. The Favorites grid joins the catalog, so after
+     * a restore it can be empty while favorites exist; only this flag makes that empty final.
+     */
+    val favoritesKnownEmpty: StateFlow<Boolean> = favoriteDao.observeForType(streamType)
+        .map { it.isEmpty() }
+        .stateIn(viewModelScope, gridFlowsStart, false)
 
     /** The category shown and how many of its rows are paged in so far (F-55), as one value. */
     private data class Window(val id: String, val limit: Int)
@@ -162,11 +181,11 @@ class CatalogViewModel(
     val selectedCategory: StateFlow<String> = window
         .map { it.id }
         .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, categoryId ?: ALL_CATEGORY_ID)
+        .stateIn(viewModelScope, gridFlowsStart, categoryId ?: ALL_CATEGORY_ID)
 
     /** Settings "Keep categories open". */
     val keepCategoriesOpen: StateFlow<Boolean> = keepCategoriesOpenFlow
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        .stateIn(viewModelScope, gridFlowsStart, false)
 
     /** True while the screen is still working out which category to open on. */
     private val restoring = MutableStateFlow(lastCategory != null)
@@ -199,7 +218,8 @@ class CatalogViewModel(
     init {
         // Continue watching empties itself (the last title finished or was removed): leave its
         // grid for the whole catalog instead of sitting on an empty row that is no longer listed.
-        viewModelScope.launch(workDispatcher) {
+        // Not on details: it has no grid to leave, and this would keep the Continue query alive.
+        if (streamId == null) viewModelScope.launch(workDispatcher) {
             continueCountOrNull.filterNotNull().collect { count ->
                 if (count == 0 && window.value.id == CONTINUE_CATEGORY_ID) select(ALL_CATEGORY_ID, remember = true)
             }
@@ -236,7 +256,7 @@ class CatalogViewModel(
             CONTINUE_CATEGORY_ID -> continueCount
             else -> categoryCounts.map { it[id] ?: 0 }
         }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+    }.stateIn(viewModelScope, gridFlowsStart, 0)
 
     /**
      * The poster grid: the rows, which category they belong to, and whether that is the category
@@ -252,17 +272,17 @@ class CatalogViewModel(
             }
             .combine(selectedCategory) { (id, items), selected -> CatalogGrid(id, items, loaded = id == selected) }
             .flowOn(workDispatcher)
-            .stateIn(viewModelScope, SharingStarted.Eagerly, CatalogGrid(null, emptyList(), loaded = false))
+            .stateIn(viewModelScope, gridFlowsStart, CatalogGrid(null, emptyList(), loaded = false))
 
     /** The poster grid's rows for the selected category. */
     val items: StateFlow<List<CatalogItem>> = grid
         .map { it.items }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(viewModelScope, gridFlowsStart, emptyList())
 
     /** Drives the poster grid's placeholder cards until the selected category's rows arrive. */
     val itemsLoaded: StateFlow<Boolean> = grid
         .map { it.loaded }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        .stateIn(viewModelScope, gridFlowsStart, false)
 
     /**
      * F-60 (Movies / Shows): the categories screen's cold-start loading
@@ -387,10 +407,6 @@ class CatalogViewModel(
         }
     }
 
-    /** When this catalog was last refreshed — "About this category" needs it. */
-    val lastRefreshMillis: StateFlow<Long> = lastRefresh
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
-
     /** The star on a poster or the details page — persisted in Room. */
     fun toggleFavorite(id: String) {
         viewModelScope.launch { favoriteDao.toggle(id, streamType) }
@@ -421,21 +437,23 @@ class CatalogViewModel(
 
     /** The rows paged in so far — one window query, re-run as the window grows. */
     private fun windowRows(): Flow<Pair<String, List<Any>>> =
-        window.flatMapLatest { (id, limit) -> streamsFor(id, limit).map { id to it } }
+        // Nothing is queried until the opening category is known (#240): the window starts on
+        // All, and a remembered category must not first pay for the whole-catalog query.
+        restoring.flatMapLatest { opening ->
+            if (opening) {
+                emptyFlow()
+            } else {
+                window.flatMapLatest { (id, limit) -> streamsFor(id, limit).map { id to it } }
+            }
+        }
 
     private fun streamsFor(id: String?, limit: Int): Flow<List<Any>> = when {
         id == PICK_CATEGORY_ID -> flow { emit(emptyList<Any>()) }
         id == RECENT_CATEGORY_ID -> recentRows(RECENT_CAP)
         id == CONTINUE_CATEGORY_ID -> continueRows(CONTINUE_CAP)
-        id == FAVORITES_CATEGORY_ID -> favoriteIds.flatMapLatest { favorites ->
-            if (favorites.isEmpty()) {
-                flow { emit(emptyList<Any>()) }
-            } else if (isMovies) {
-                vodStreamDao.observeByIds(favorites.toList())
-            } else {
-                seriesStreamDao.observeByIds(favorites.toList())
-            }
-        }
+        // #232: in the saved order (position, ties newest first), straight from SQL.
+        id == FAVORITES_CATEGORY_ID ->
+            if (isMovies) vodStreamDao.observeFavorites() else seriesStreamDao.observeFavorites()
         isMovies && id == null -> vodStreamDao.observeGridWindow(limit)
         isMovies && id == ALL_CATEGORY_ID -> vodStreamDao.observeGridWindow(limit)
         isMovies && id != null -> vodStreamDao.observeGridWindowByCategory(id, limit)
@@ -550,15 +568,14 @@ class CatalogViewModel(
         // response, the row itself is what the user sees (the handoff's
         // designed "missing info" state), never a crash.
         if (isMovies) {
-            // `info` is captured here so the log line below reflects the actual
-            // panel payload, not whether `toDetail()` returned a `VodDetail`.
+            // The cached row first (#240): title, poster and Play need nothing from the provider,
+            // so the page draws now and `get_vod_info` only fills in the rest. [infoPending]
+            // lets the screen hold the slots the metadata will take.
+            emit(base.copy(infoPending = true))
             // An `info`-less response ("{}") is a panel-acceptable empty state
             // and falls through; a network failure is silently caught by
             // `runCatching`. Either way, F-50 must degrade gracefully.
-            val (detail, hadInfo) = runCatching {
-                val res = session()?.getVodInfo(id)
-                res?.toDetail() to (res?.info != null)
-            }.getOrElse { null to false } ?: (null to false)
+            val detail = runCatching { session()?.getVodInfo(id)?.toDetail() }.getOrNull()
             if (detail != null) {
                 emit(
                     base.copy(
@@ -575,12 +592,9 @@ class CatalogViewModel(
                 )
                 return@flow
             }
-            // Visibility: a future "F-50 regressed" report should land with a
-            // logcat trace showing why the enrich ran on the row fallback.
-            android.util.Log.i(
-                "CatalogF50",
-                "vod_id=$id enriched=${if (hadInfo) "info-block" else "no-info"}; falling back to row",
-            )
+            // The row stays as it is; only the "still loading" hold is released.
+            emit(base)
+            return@flow
         }
         if (!isMovies) {
             // Paint the row's art immediately, then upgrade from `get_series_info`.
@@ -597,7 +611,6 @@ class CatalogViewModel(
             }
             return@flow
         }
-        emit(base)
     }
 
     class Factory(
@@ -761,6 +774,11 @@ data class CatalogDetail(
     val backdropUrl: String? = null,
     /** Set when watch progress exists (#78): details then offers Resume and Start over. */
     val resume: ResumePoint? = null,
+    /**
+     * A movie row painted from the cache while `get_vod_info` is still out (#240). The screen
+     * keeps the year, genre and plot slots at their size instead of saying "not available".
+     */
+    val infoPending: Boolean = false,
 )
 
 /**

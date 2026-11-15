@@ -26,8 +26,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +53,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.rysal.happytv.perf.HtvPerf
 import com.rysal.happytv.ui.focus.htvFocusTarget
+import com.rysal.happytv.ui.focus.isOk
 import com.rysal.happytv.ui.focus.tryRequest
 import com.rysal.happytv.ui.theme.HappyTvDarkColors
 import com.rysal.happytv.ui.theme.HappyTvDesign
@@ -65,7 +68,8 @@ import kotlinx.coroutines.delay
  *
  * D-pad rules (the sticky note on the canvas):
  *  - Any button shows the controls; they fade after 5 s without input.
- *  - OK: pause or play. Up/Down: program info, without pausing.
+ *  - OK: pause or play. Live, controls hidden: Up/Down change channel (#224); open: Down opens the
+ *    recent channels row, Up does nothing, and Now / Next is the info button's. Replay: Up/Down show program info.
  *  - Left/Right: move between controls while shown; skip 10 s on movies
  *    while hidden.
  *  - Back: closes the controls, then leaves; a movie with more than 5 min
@@ -92,6 +96,16 @@ fun PlayerScreen(
     canvasFocus: FocusRequester? = null,
     /** #21: the refused-redirect card's "Open settings"; null opens Settings at the Player section. */
     onOpenSettings: (() -> Unit)? = null,
+    /**
+     * #220: switch to a recently watched channel, full screen and live. Set by the hosts that play live
+     * channels (Live TV window, and the player activity for catch-up); null hides the recent channels row.
+     */
+    onPlayRecent: ((streamId: String) -> Unit)? = null,
+    /**
+     * #224: channel up/down. Set by the Live TV window; with it, Up and Down step through the channel list
+     * while the controls are hidden. Null (the movie player) keeps Up/Down as Now / Next toggles.
+     */
+    channelStepper: ChannelStepper? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val openSettings: () -> Unit = onOpenSettings ?: {
@@ -103,7 +117,8 @@ fun PlayerScreen(
                 ),
         )
     }
-    val state by viewModel.state.collectAsStateWithLifecycle()
+    // #239: the state without the 1 s progress tick; the scrubber and badge read viewModel.tick.
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val endOfPlayback by viewModel.endOfPlayback.collectAsStateWithLifecycle()
     // #84: the end-of-episode card owns the screen while it shows (not on ReturnToDetails, which leaves).
@@ -118,6 +133,29 @@ fun PlayerScreen(
     var lastInputAtMillis by remember { mutableLongStateOf(0L) }
     var tracksPanelOpen by remember { mutableStateOf(false) }
     var leaveConfirmOpen by remember { mutableStateOf(false) }
+    // #220: the recent channels row replaces the control row and progress row while open.
+    var recentRowOpen by remember { mutableStateOf(false) }
+    var recentFocusIndex by remember { mutableIntStateOf(0) }
+    var recentReturnControl by remember { mutableStateOf<PlayerControl?>(null) }
+    // A pick from the row closes the controls too: the next Ready must not bring them back.
+    var quietNextReady by remember { mutableStateOf(false) }
+    val recentCards by viewModel.recentChannels.collectAsStateWithLifecycle()
+    val recentRequesters = remember { List(RECENT_CHANNELS_MAX) { FocusRequester() } }
+    // #224: a channel reached by Up/Down plays with the controls closed, like a recent-row pick.
+    val zapScope = androidx.compose.runtime.rememberCoroutineScope()
+    val zapDesign = LocalHappyTvDesign.current
+    val zapper = remember(channelStepper) {
+        channelStepper?.let { stepper ->
+            ChannelZapper(zapScope, stepper, clock = System::currentTimeMillis, beforeTune = { quietNextReady = true })
+        }
+    }
+    DisposableEffect(zapper) { onDispose { zapper?.cancel() } }
+    val zapPreview = zapper?.preview?.collectAsStateWithLifecycle()?.value
+    LaunchedEffect(zapPreview) {
+        if (zapPreview == null) return@LaunchedEffect
+        delay(ZAP_INFO_HIDE_MILLIS)
+        zapper?.dismiss()
+    }
     // A focus request queued from an event handler; the effect below lands it
     // once the target control has composed and attached its requester.
     var pendingFocus by remember { mutableStateOf<FocusRequester?>(null) }
@@ -230,7 +268,7 @@ fun PlayerScreen(
     }
 
     fun seekPress(direction: Int, repeatCount: Int) {
-        val progress = content?.progress ?: return
+        val progress = liveContent()?.progress ?: return
         seekTargetMillis = seekSession.press(
             direction = direction,
             repeatCount = repeatCount,
@@ -254,16 +292,20 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(controlsVisible) {
-        if (!controlsVisible) scrubberFocused = false
+        if (!controlsVisible) {
+            scrubberFocused = false
+            recentRowOpen = false
+        }
     }
 
-    // Controls fade after 5 s without input (never while the panel is open
-    // or the stream is buffering — those states hide the controls anyway).
-    LaunchedEffect(controlsVisible, lastInputAtMillis, tracksPanelOpen, content?.isBuffering) {
+    // Controls fade after 5 s without input, 10 s while the recent channels row is open (never while
+    // the panel is open or the stream is buffering — those states hide the controls anyway).
+    LaunchedEffect(controlsVisible, lastInputAtMillis, tracksPanelOpen, content?.isBuffering, recentRowOpen) {
         if (controlsVisible && !tracksPanelOpen && content?.isBuffering != true) {
-            delay(5_000L)
+            delay(controlsHideDelayMillis(recentRowOpen))
             controlsVisible = false
             focusedControl = null
+            recentRowOpen = false
         }
     }
 
@@ -307,7 +349,22 @@ fun PlayerScreen(
 
     // Entering Ready the first time: controls up with the mode's default focus.
     LaunchedEffect(ready?.content?.url) {
-        if (ready != null) showControls()
+        if (ready != null) {
+            // #220: a channel picked from the recent channels row plays with the controls closed.
+            val step = quietZapStep(quietNextReady, ZapLanding.Ready)
+            quietNextReady = step.armed
+            if (step.showControls) showControls()
+        }
+    }
+    // A picked channel that fails (offline, not found, unsupported...) must not leave the next zap quiet.
+    val zapLanding = when {
+        ready != null -> ZapLanding.Ready
+        state is PlayerUiState.Loading -> ZapLanding.Loading
+        else -> ZapLanding.Failed
+    }
+    LaunchedEffect(zapLanding) {
+        // Ready is consumed by the effect above; only a failure disarms here.
+        if (zapLanding == ZapLanding.Failed) quietNextReady = quietZapStep(quietNextReady, zapLanding).armed
     }
 
     // Both error cards open focused on their primary button. design spec (Player
@@ -333,6 +390,46 @@ fun PlayerScreen(
         }
     }
 
+    val recentEligible = recentRowEligible(
+        mode = content?.mode,
+        hasPickHandler = onPlayRecent != null,
+        recentCount = recentCards.size,
+        tracksPanelOpen = tracksPanelOpen,
+        leaveConfirmOpen = leaveConfirmOpen,
+        endCardOpen = endCardOpen,
+        buffering = content?.isBuffering == true,
+        controlsVisible = controlsVisible,
+    )
+
+    fun openRecentRow() {
+        recentReturnControl = focusedControl
+        recentRowOpen = true
+        controlsVisible = true
+        lastInputAtMillis = System.currentTimeMillis()
+        focusedControl = null
+        recentFocusIndex = 0
+        viewModel.hideProgramInfo()
+        pendingFocus = recentRequesters[0]
+    }
+
+    // Up or Back: back to the controls, focus on the control the viewer came from (else Play/Pause).
+    fun closeRecentRow() {
+        recentRowOpen = false
+        lastInputAtMillis = System.currentTimeMillis()
+        val back = recentReturnControl?.takeIf { requesters.containsKey(it) } ?: defaultControl()
+        focusedControl = back
+        pendingFocus = requesters[back]
+    }
+
+    fun pickRecent(index: Int) {
+        val card = recentCards.getOrNull(index) ?: return
+        recentRowOpen = false
+        controlsVisible = false
+        focusedControl = null
+        quietNextReady = true
+        onPlayRecent?.invoke(card.streamId)
+    }
+
     fun handleBack() {
         when {
             // #84: Back cancels the countdown (stays on the ended frame); a second Back leaves.
@@ -350,6 +447,7 @@ fun PlayerScreen(
                 leaveConfirmOpen = false
                 showControls()
             }
+            recentRowOpen -> closeRecentRow()
             controlsVisible -> {
                 controlsVisible = false
                 focusedControl = null
@@ -421,8 +519,63 @@ fun PlayerScreen(
                     commitSeek()
                     return@onPreviewKeyEvent false
                 }
+                // #224: releasing a held Up/Down tunes the channel it stopped on.
+                if (event.type == KeyEventType.KeyUp && zapper != null &&
+                    (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+                ) {
+                    zapper.release()
+                    return@onPreviewKeyEvent false
+                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                // #224: stepping goes on through the load after a tune and over a dead channel's card.
+                if (!ownsKeys && zapper != null && (event.key == Key.DirectionUp || event.key == Key.DirectionDown) &&
+                    zapKeysOutsideReady(
+                        loading = state is PlayerUiState.Loading,
+                        zapActive = zapper.isActive,
+                        errorCardMode = (offline?.content ?: unsupportedFormat?.content)?.mode,
+                    )
+                ) {
+                    zapper.step(if (event.key == Key.DirectionDown) 1 else -1, event.nativeKeyEvent.repeatCount)
+                    return@onPreviewKeyEvent true
+                }
                 if (!ownsKeys) return@onPreviewKeyEvent false
+                // #220: Down opens the recent channels row; while it is open it owns the D-pad.
+                val recentKey = when {
+                    event.isOkKey() -> RecentRowKey.Ok
+                    event.key == Key.DirectionUp -> RecentRowKey.Up
+                    event.key == Key.DirectionDown -> RecentRowKey.Down
+                    event.key == Key.DirectionLeft -> RecentRowKey.Left
+                    event.key == Key.DirectionRight -> RecentRowKey.Right
+                    else -> null
+                }
+                if (recentKey != null) {
+                    when (val action = RecentRowKeys.route(recentKey, recentRowOpen, recentEligible, recentFocusIndex, recentCards.size)) {
+                        RecentRowAction.PassThrough -> Unit
+                        RecentRowAction.Consume -> {
+                            lastInputAtMillis = System.currentTimeMillis()
+                            return@onPreviewKeyEvent true
+                        }
+                        RecentRowAction.OpenRow -> {
+                            openRecentRow()
+                            return@onPreviewKeyEvent true
+                        }
+                        RecentRowAction.CloseRow -> {
+                            closeRecentRow()
+                            return@onPreviewKeyEvent true
+                        }
+                        is RecentRowAction.FocusCard -> {
+                            lastInputAtMillis = System.currentTimeMillis()
+                            recentFocusIndex = action.index
+                            recentRequesters[action.index].tryRequest()
+                            return@onPreviewKeyEvent true
+                        }
+                        RecentRowAction.PickFocused -> {
+                            okSequence.begin()
+                            pickRecent(recentFocusIndex)
+                            return@onPreviewKeyEvent true
+                        }
+                    }
+                }
                 when {
                     event.key == Key.Back -> {
                         handleBack()
@@ -461,22 +614,33 @@ fun PlayerScreen(
                         }
                     }
                     event.key == Key.DirectionUp || event.key == Key.DirectionDown -> {
-                        if (seekMode && controlsVisible && !tracksPanelOpen) {
-                            // #102: the scrubber sits below the buttons; Up/Down move between them.
-                            showControls(requestFocus = false)
-                            if (event.key == Key.DirectionDown) {
-                                if (!scrubberFocused) pendingFocus = scrubberFocus
-                            } else if (scrubberFocused) {
-                                pendingFocus = requesters[lastButton ?: defaultControl()]
+                        val down = event.key == Key.DirectionDown
+                        when (verticalKeyAction(down, content?.mode, controlsVisible, tracksPanelOpen, zapper != null)) {
+                            VerticalKeyAction.MovieScrubber -> {
+                                // #102: the scrubber sits below the buttons; Up/Down move between them.
+                                showControls(requestFocus = false)
+                                if (down) {
+                                    if (!scrubberFocused) pendingFocus = scrubberFocus
+                                } else if (scrubberFocused) {
+                                    pendingFocus = requesters[lastButton ?: defaultControl()]
+                                }
+                                true
                             }
-                            true
-                        } else if (!tracksPanelOpen) {
-                            // Hidden: bring the controls up with focus on the default button.
-                            showControls(requestFocus = !controlsVisible)
-                            viewModel.toggleProgramInfo()
-                            true
-                        } else {
-                            false // the panel's focus graph moves the selection
+                            VerticalKeyAction.ChannelUp, VerticalKeyAction.ChannelDown -> {
+                                zapper?.step(if (down) 1 else -1, event.nativeKeyEvent.repeatCount)
+                                true
+                            }
+                            VerticalKeyAction.Ignore -> {
+                                lastInputAtMillis = System.currentTimeMillis()
+                                true
+                            }
+                            VerticalKeyAction.ToggleProgramInfo -> {
+                                // Hidden: bring the controls up with focus on the default button.
+                                showControls(requestFocus = !controlsVisible)
+                                viewModel.toggleProgramInfo()
+                                true
+                            }
+                            VerticalKeyAction.PassToPanel -> false // the panel's focus graph moves the selection
                         }
                     }
                     event.key == Key.DirectionLeft || event.key == Key.DirectionRight -> {
@@ -571,7 +735,19 @@ fun PlayerScreen(
 
             is PlayerUiState.Ready -> PlayerChrome(
                 keepControlsWhileBuffering = seekBuffering,
-                content = seekTargetMillis?.let { ui.content.withSeekPreview(it) } ?: ui.content,
+                recentRow = RecentRowUi(
+                    cards = recentCards,
+                    open = recentRowOpen && recentCards.isNotEmpty(),
+                    hintVisible = recentEligible && !recentRowOpen,
+                    requesters = recentRequesters,
+                    focusedIndex = recentFocusIndex,
+                    nowUtcMillis = now,
+                    onCardFocused = { recentFocusIndex = it },
+                    onPick = ::pickRecent,
+                ),
+                content = ui.content,
+                tick = viewModel.tick,
+                seekTargetMillis = seekTargetMillis,
                 seekTargetLabel = seekTargetMillis?.let { PlayerFormatting.runtimeLabel(it) },
                 scrubberFocus = scrubberFocus,
                 onScrubberFocusChange = { focused ->
@@ -648,6 +824,17 @@ fun PlayerScreen(
             )
         }
 
+        // #224: number, name and program of the channel a step is going to (or has just opened).
+        if (zapPreview != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = zapDesign.px(96), bottom = zapDesign.px(1080 - 776)),
+            ) {
+                PlayerInfoCardView(zapPreview.card)
+            }
+        }
+
         if (endCardOpen) {
             EndOfEpisodeCard(
                 state = endOfPlayback,
@@ -664,8 +851,8 @@ fun PlayerScreen(
         // the dialog component — "On a movie with more than 5 min left, it
         // asks first").
         if (leaveConfirmOpen && content != null) {
-            LeaveMovieDialog(
-                remainingMillis = content.progress.remainingMillis(),
+            LeaveMovieDialogHost(
+                tick = viewModel.tick,
                 onKeepWatching = {
                     leaveConfirmOpen = false
                     showControls()
@@ -679,12 +866,62 @@ fun PlayerScreen(
     }
 }
 
+/**
+ * #239: the only readers of the 1 s tick are this and [LeaveMovieDialogHost]; each is its own
+ * restartable scope, so a tick re-runs only them. Nothing is drawn until a tick exists.
+ */
+@Composable
+private fun TickingProgressRow(
+    tick: StateFlow<PlayerTick?>,
+    mode: PlaybackMode,
+    seekTargetMillis: Long?,
+    seekTargetLabel: String?,
+    scrubberFocus: FocusRequester,
+    onScrubberFocusChange: (Boolean) -> Unit,
+) {
+    val ticking by tick.collectAsStateWithLifecycle()
+    val current = ticking ?: return
+    PlayerProgressRow(
+        progress = current.progress.withSeekPreview(mode, seekTargetMillis),
+        badge = current.badge,
+        seekable = mode == PlaybackMode.Movie,
+        seekTargetLabel = seekTargetLabel,
+        scrubberFocus = scrubberFocus,
+        onScrubberFocusChange = onScrubberFocusChange,
+    )
+}
+
+/** The leave dialog's "about N min left" ages with the tick; see [TickingProgressRow]. */
+@Composable
+private fun LeaveMovieDialogHost(
+    tick: StateFlow<PlayerTick?>,
+    onKeepWatching: () -> Unit,
+    onStopWatching: () -> Unit,
+    keepWatchingFocus: FocusRequester,
+    stopWatchingFocus: FocusRequester,
+    isEpisode: Boolean,
+) {
+    val ticking by tick.collectAsStateWithLifecycle()
+    val current = ticking ?: return
+    LeaveMovieDialog(
+        remainingMillis = current.progress.remainingMillis(),
+        onKeepWatching = onKeepWatching,
+        onStopWatching = onStopWatching,
+        keepWatchingFocus = keepWatchingFocus,
+        stopWatchingFocus = stopWatchingFocus,
+        isEpisode = isEpisode,
+    )
+}
+
 // ------------------------------------------------------------------- chrome
 
 /** The chrome Box children need [BoxScope] for `align`. */
 @Composable
 private fun BoxScope.PlayerChrome(
     content: PlayerContent,
+    tick: StateFlow<PlayerTick?>,
+    seekTargetMillis: Long?,
+    recentRow: RecentRowUi,
     keepControlsWhileBuffering: Boolean,
     seekTargetLabel: String?,
     scrubberFocus: FocusRequester,
@@ -715,7 +952,13 @@ private fun BoxScope.PlayerChrome(
     // stays through buffering.
     if (controlsVisible && !buffering) {
         Box(modifier = Modifier.align(Alignment.TopCenter)) { PlayerTopGradient() }
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) { PlayerBottomGradient() }
+        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            if (recentRow.open) {
+                PlayerBottomGradient(heightPx = RECENT_SCRIM_HEIGHT_PX, fadePx = RECENT_SCRIM_FADE_PX)
+            } else {
+                PlayerBottomGradient()
+            }
+        }
     }
 
     // Top block + clock (top 54). Stays while buffering; hides with controls.
@@ -758,8 +1001,18 @@ private fun BoxScope.PlayerChrome(
         }
     }
 
+    // #220: the recent channels row takes the place of the control row and progress row.
+    if (controlsVisible && recentRow.open && !buffering) {
+        RecentChannelsRow(
+            ui = recentRow,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = d.px(96), end = d.px(96), bottom = d.px(54)),
+        )
+    }
+
     // Control row + progress row.
-    if (controlsVisible && (!buffering || keepControlsWhileBuffering)) {
+    if (controlsVisible && !recentRow.open && (!buffering || keepControlsWhileBuffering)) {
         Box(modifier = Modifier.offset(x = d.px(96), y = d.px(800))) {
             PlayerControlRow(
                 content = content,
@@ -775,11 +1028,16 @@ private fun BoxScope.PlayerChrome(
                 onFavorite = onFavorite,
             )
         }
+        if (recentRow.hintVisible) {
+            Box(modifier = Modifier.align(Alignment.TopEnd).offset(x = -d.px(96), y = d.px(800))) {
+                RecentChannelsHint()
+            }
+        }
         Box(modifier = Modifier.offset(x = d.px(96), y = d.px(966))) {
-            PlayerProgressRow(
-                progress = content.progress,
-                badge = content.badge,
-                seekable = content.mode == PlaybackMode.Movie,
+            TickingProgressRow(
+                tick = tick,
+                mode = content.mode,
+                seekTargetMillis = seekTargetMillis,
                 seekTargetLabel = seekTargetLabel,
                 scrubberFocus = scrubberFocus,
                 onScrubberFocusChange = onScrubberFocusChange,
@@ -1321,8 +1579,7 @@ private const val PENDING_FOCUS_TIMEOUT_NANOS = 1_000_000_000L
 /** Ask before leaving a movie with more than 5 minutes left. */
 private const val LEAVE_CONFIRM_THRESHOLD_MILLIS = 5L * 60L * 1000L
 
-private fun androidx.compose.ui.input.key.KeyEvent.isOkKey(): Boolean =
-    key == Key.Enter || key == Key.NumPadEnter || key == Key.DirectionCenter
+private fun androidx.compose.ui.input.key.KeyEvent.isOkKey(): Boolean = isOk()
 
 /**
  * #136 QA: the OK press that this screen handled on KeyDown owns the whole sequence: its
@@ -1403,16 +1660,13 @@ internal fun needsRootFocus(
 ): Boolean = ready && !controlsVisible && !tracksPanelOpen && !leaveConfirmOpen && !endCardOpen
 
 /** The scrubber while a seek is pending (#102): dot, fill and elapsed label at [targetMillis]. */
-internal fun PlayerContent.withSeekPreview(targetMillis: Long): PlayerContent {
-    val duration = progress.durationMillis
-    if (mode != PlaybackMode.Movie || duration <= 0L) return this
-    val fraction = (targetMillis.toFloat() / duration).coerceIn(0f, 1f)
+internal fun PlayerProgress.withSeekPreview(mode: PlaybackMode, targetMillis: Long?): PlayerProgress {
+    if (targetMillis == null || mode != PlaybackMode.Movie || durationMillis <= 0L) return this
+    val fraction = (targetMillis.toFloat() / durationMillis).coerceIn(0f, 1f)
     return copy(
-        progress = progress.copy(
-            fillFraction = fraction,
-            bufferedFraction = maxOf(progress.bufferedFraction, fraction),
-            startLabel = PlayerFormatting.runtimeLabel(targetMillis),
-        ),
+        fillFraction = fraction,
+        bufferedFraction = maxOf(bufferedFraction, fraction),
+        startLabel = PlayerFormatting.runtimeLabel(targetMillis),
     )
 }
 
@@ -1423,3 +1677,10 @@ private fun PlayerProgress.remainingMillis(): Long =
 /** The control that takes focus when the controls are revealed: Play/Pause in every mode (#138). */
 internal fun defaultControlFor(mode: PlaybackMode?): PlayerControl = PlayerControl.PlayPause
 private const val START_OVER_FOCUS_WINDOW_MILLIS = 15_000L
+
+/**
+ * Up/Down while the screen is not Ready (#224): stepping goes on while a step panel is up through the
+ * load, and over the offline and unsupported-format cards of a live channel (their buttons sit in a row).
+ */
+internal fun zapKeysOutsideReady(loading: Boolean, zapActive: Boolean, errorCardMode: PlaybackMode?): Boolean =
+    (loading && zapActive) || errorCardMode == PlaybackMode.Live

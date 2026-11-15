@@ -40,7 +40,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.foundation.Canvas
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Icon
@@ -78,11 +82,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.ViewModelProvider
@@ -96,9 +106,13 @@ import com.rysal.happytv.data.guide.knownGenre
 import com.rysal.happytv.data.guide.toGuideProgram
 import com.rysal.happytv.perf.HtvPerf
 import com.rysal.happytv.ui.focus.FOCUS_WAIT_TIMEOUT_MS
+import com.rysal.happytv.ui.focus.EmptyFocus
 import com.rysal.happytv.ui.focus.awaitFocus
 import com.rysal.happytv.ui.focus.focusTargetAfterRemoval
+import com.rysal.happytv.ui.focus.rememberFocusAfterRemoval
+import com.rysal.happytv.ui.focus.tryRequest
 import com.rysal.happytv.ui.player.BackKeyGate
+import com.rysal.happytv.ui.player.ChannelListSource
 import com.rysal.happytv.ui.guide.GuideBody
 import com.rysal.happytv.ui.guide.GuideDay
 import com.rysal.happytv.ui.guide.GuideDetailsDialog
@@ -230,10 +244,18 @@ fun LiveTvScreen(
             viewModel.programFor(streamId, epgChannelId, at)?.toGuideProgram()
         },
         onPlayChannel = { stream ->
+            // #224: channel up/down follows the list this channel was played from.
+            playback?.channelList = state.selectedSelection.toChannelListSource()
             viewModel.recordWatched(stream.id)
             onPlayChannel(stream)
         },
         onToggleFavorite = viewModel::toggleFavorite,
+        onStartReorder = viewModel::startReorder,
+        onReorderOk = viewModel::reorderOk,
+        onReorderMove = viewModel::reorderMove,
+        onReorderJump = viewModel::reorderJump,
+        onReorderBack = { viewModel.reorderBack() },
+        onReorderRelease = viewModel::reorderRelease,
         onLongPressChannel = viewModel::openChannelMenu,
         onCloseChannelMenu = viewModel::closeChannelMenu,
         onWatchFromStart = { stream ->
@@ -250,6 +272,7 @@ fun LiveTvScreen(
                         program.toGuideProgram().durationMinutes,
                     )
                 } else {
+                    playback?.channelList = state.selectedSelection.toChannelListSource()
                     onWatchFromStart(stream)
                 }
             }
@@ -309,22 +332,6 @@ internal fun railReturnTarget(
     else -> RailReturn.FirstRow
 }
 
-/**
- * F-40: [FocusRequester.requestFocus] throws `IllegalStateException`
- * ("FocusRequester is not initialized") when no attached row backs this
- * requester — the rail disposes its first row when the LazyColumn scrolls it
- * out of view, and `channelsFocused` can still be true at that point.
- *
- * Returns true when focus was requested (the requester is attached), false
- * when it isn't, so callers can fall back instead of crashing.
- */
-internal fun FocusRequester.tryRequestFocus(): Boolean = try {
-    requestFocus()
-    true
-} catch (_: IllegalStateException) {
-    false
-}
-
 @Composable
 private fun LiveTvContent(
     state: LiveTvUiState,
@@ -351,6 +358,13 @@ private fun LiveTvContent(
     loadProgram: suspend (streamId: String, epgChannelId: String?, atUtcMillis: Long) -> GuideProgram?,
     onPlayChannel: (LiveStream) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    /** #221: the menu's "Reorder channels", and the mode's keys (see [BrowseViewModel.startReorder]). */
+    onStartReorder: () -> Unit = {},
+    onReorderOk: (String) -> Unit = {},
+    onReorderMove: (Int) -> Unit = {},
+    onReorderJump: (Boolean) -> Unit = {},
+    onReorderBack: () -> Unit = {},
+    onReorderRelease: () -> Unit = {},
     onLongPressChannel: (LiveStream) -> Unit,
     onCloseChannelMenu: () -> Unit,
     onWatchFromStart: (LiveStream) -> Unit,
@@ -370,6 +384,9 @@ private fun LiveTvContent(
     val d = browseDesign()
     val currentState by rememberUpdatedState(state)
     val currentGuide by rememberUpdatedState(guide)
+    // #221: reorder mode (Favorites only).
+    val reorder = state.reorder
+    val reordering = reorder != null
 
     // ---- view (spec #7 section 3.4 / 3.6) ---------------------------------------
     // While the first answer is pending the stored view is not known yet: neither body.
@@ -465,7 +482,7 @@ private fun LiveTvContent(
         )
         // Success is focus really being in the rail: a request that finds no
         // composed row yet does nothing, and does not throw. Bounded by time.
-        if (awaitFocus(landed = { railHasFocus }, request = { railEntry.tryRequestFocus() })) {
+        if (awaitFocus(landed = { railHasFocus }, request = { railEntry.tryRequest() })) {
             railFocusOverride = null
         }
     }
@@ -492,12 +509,12 @@ private fun LiveTvContent(
             is RailReturn.Row -> {
                 returnRowId = back.id
                 try {
-                    awaitFocus(landed = { channelsHaveFocus }, request = { menuRowFocus.tryRequestFocus() })
+                    awaitFocus(landed = { channelsHaveFocus }, request = { menuRowFocus.tryRequest() })
                 } finally {
                     returnRowId = null
                 }
             }
-            RailReturn.FirstRow -> awaitFocus(landed = { channelsHaveFocus }, request = { listFocus.tryRequestFocus() })
+            RailReturn.FirstRow -> awaitFocus(landed = { channelsHaveFocus }, request = { listFocus.tryRequest() })
         }
         if (!landed) fanOutRail()
     }
@@ -536,31 +553,34 @@ private fun LiveTvContent(
     // it"), so the pane is never left with nothing focused.
     val menuItemFocus = remember { FocusRequester() }
     val categoryMenuFocus = remember { FocusRequester() }
-    // F-53: "Remove from recently watched" deletes the very row the menu was
-    // opened on, so the usual handback target is gone when the menu closes.
-    // Focus goes to the row that takes its place instead (the one below, or
-    // the one above when the removed row was last) — or nowhere here, letting
-    // the empty state take focus when the list drops to zero. Hiding a channel
-    // hands focus over the same way.
-    var focusAfterRemoveId by remember { mutableStateOf<String?>(null) }
-    // F-57: set when a remove empties the list — the empty state's CTA
-    // takes focus on the next composition of ChannelPaneEmptyState.
-    var emptyStateTakeFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(state.selectedSelection) { emptyStateTakeFocus = false }
-    // #171: removing the last favorite from Favorites (the menu, or the row's star) empties the
-    // pane; the empty state's action takes the D-pad once it arrives.
+    // #242: one holder for every removal that takes the focused row out of the list (F-53 remove from
+    // recently watched, hide channel, #171/#227/#230 remove from Favorites). It records the removed
+    // id and its index, waits for the list to drop it (the Room emission is async), then focus goes
+    // to the row that took its place (the one above when it was last; `menuRowFocus` rides on that
+    // row via `focusRowId`), or, when the list is now empty, to the category rail (#227) -- or to the
+    // empty state's action in Recently watched (F-57).
+    val removal = rememberFocusAfterRemoval(
+        items = state.channels,
+        keyOf = { it.stream.id },
+        ready = !state.isLoading,
+        resetKey = state.selectedSelection,
+    )
+    LaunchedEffect(removal.focusKey) {
+        if (removal.focusKey == null) return@LaunchedEffect
+        try {
+            if (!awaitFocus(landed = { channelsHaveFocus }, request = { menuRowFocus.tryRequest() })) fanOutRail()
+        } finally {
+            removal.focusHandled()
+        }
+    }
+    LaunchedEffect(removal.emptiedTo) {
+        if (removal.emptiedTo == EmptyFocus.Rail) fanOutRail()
+    }
     val toggleFavorite: (String) -> Unit = { id ->
-        if (removesLastFavorite(state.selectedSelection, state.channels.size, id in state.favoriteIds)) {
-            emptyStateTakeFocus = true
+        if (state.selectedSelection is LiveCategorySelection.Favorites && id in state.favoriteIds) {
+            removal.removed(id)
         }
         onToggleFavorite(id)
-    }
-    LaunchedEffect(focusAfterRemoveId) {
-        if (focusAfterRemoveId == null) return@LaunchedEffect
-        focusAfterRemoveId = null
-        // `menuRowFocus` rides on the target row via `focusRowId` below; it can
-        // be detached (F-40's crash), so guard the request.
-        if (!menuRowFocus.tryRequestFocus()) fanOutRail()
     }
     // #16: Back from full-screen playback (to the preview, or a stop) puts the D-pad
     // back on the channel that was playing. The row's requester is attached by the
@@ -620,7 +640,7 @@ private fun LiveTvContent(
         }
         restoreRowId = id?.takeIf { wanted -> currentState.channels.any { it.stream.id == wanted } }
         val landed = restoreRowId != null &&
-            awaitFocus(timeoutMs = if (host.restoreJump) JUMP_GUIDE_TIMEOUT_MILLIS / 2 else FOCUS_WAIT_TIMEOUT_MS, landed = { channelsHaveFocus }, request = { menuRowFocus.tryRequestFocus() })
+            awaitFocus(timeoutMs = if (host.restoreJump) JUMP_GUIDE_TIMEOUT_MILLIS / 2 else FOCUS_WAIT_TIMEOUT_MS, landed = { channelsHaveFocus }, request = { menuRowFocus.tryRequest() })
         jumpInFlight = false
         if (!landed) listFocusTick++
         restoreRowId = null
@@ -628,11 +648,16 @@ private fun LiveTvContent(
         HtvPerf.end(HtvPerf.PLAYER_BACK_PREVIEW)
     }
     val hideChannelAndRefocus: (LiveStream) -> Unit = { stream ->
-        val rows = state.channels
-        val index = rows.indexOfFirst { it.stream.id == stream.id }
-        val next = rows.getOrNull(index + 1) ?: rows.getOrNull(index - 1)
+        // #242: focus follows the shared removal rule once the list drops the channel.
+        // With "Show hidden channels" on the row stays in the list (#191), so focus moves to its
+        // neighbour at once instead of waiting for a drop that never comes.
+        val recorded = if (state.showHiddenChannels) {
+            removal.focusNeighbourOf(stream.id)
+        } else {
+            removal.removed(stream.id)
+        }
         onHideChannel(stream)
-        if (next != null) focusAfterRemoveId = next.stream.id else fanOutRail()
+        if (!recorded) fanOutRail()
     }
     val hideCategoryAndFanOut: (String) -> Unit = { categoryId ->
         // #114: focus lands on the category that takes the hidden one's place, and the rail
@@ -656,7 +681,7 @@ private fun LiveTvContent(
     val moreButtonFocus = remember { FocusRequester() }
     val moreItemFocus = remember { FocusRequester() }
     val closeMoreMenu: () -> Unit = {
-        moreButtonFocus.tryRequestFocus()
+        moreButtonFocus.tryRequest()
         onCloseMoreMenu()
     }
     // A modal over a playing preview hides the video for its lifetime (see LivePlayback).
@@ -666,6 +691,8 @@ private fun LiveTvContent(
     }
     val handleBack: () -> Unit = {
         when {
+            // #221: a selected channel goes back where it was (the mode stays); with none selected the mode ends.
+            reordering -> onReorderBack()
             guideDialog != null -> closeGuideDialog()
             channelMenu != null -> onCloseChannelMenu()
             categoryMenu != null -> dismissCategoryMenu()
@@ -694,6 +721,52 @@ private fun LiveTvContent(
         }
     }
     BackHandler(enabled = playback?.fullActive != true) { handleBack() }
+    // #221: the mode's keys. Up and Down move the selected channel (faster the longer they are held);
+    // Left or Rewind sends it to the top, Right or Fast-forward to the bottom; with nothing selected
+    // Left and Right rest. Nothing else is taken, so Up and Down still walk the list between picks.
+    val handleReorderKey: (KeyEvent) -> Boolean = { event ->
+        val selected = currentState.reorder?.selectedId != null
+        val down = event.type == KeyEventType.KeyDown
+        when (event.key) {
+            Key.DirectionUp, Key.DirectionDown -> if (!selected) {
+                false
+            } else {
+                if (down) {
+                    val step = reorderStepFor(event.nativeKeyEvent.repeatCount)
+                    onReorderMove(if (event.key == Key.DirectionUp) -step else step)
+                }
+                true
+            }
+            Key.DirectionLeft, Key.MediaRewind -> {
+                if (selected && down) onReorderJump(true)
+                true
+            }
+            Key.DirectionRight, Key.MediaFastForward -> {
+                if (selected && down) onReorderJump(false)
+                true
+            }
+            else -> false
+        }
+    }
+    // Home or screen-off while a channel is selected acts like Back. (A place is already saved.)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) onReorderRelease()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // A moved channel can scroll out of composition and lose the D-pad: ask for it back.
+    val reorderSelectedId = reorder?.selectedId
+    LaunchedEffect(reorderSelectedId, reorder?.position) {
+        if (reorderSelectedId == null) return@LaunchedEffect
+        withFrameNanos { }
+        withFrameNanos { }
+        if (!channelsHaveFocus) {
+            awaitFocus(landed = { channelsHaveFocus }, request = { menuRowFocus.tryRequest() })
+        }
+    }
     // #146: a channel taken full screen from a moved guide brings the guide back to Now, so Back from
     // full screen lands on the channel at Now (its info band reads the program on now, not "No guide info").
     val fullScreen = playback?.fullActive == true
@@ -732,7 +805,9 @@ private fun LiveTvContent(
             // before the activity can see it, which left the D-pad on nothing and
             // needed a second Back (QA on #42).
             .onPreviewKeyEvent { event ->
-                if (event.key != Key.Back || menuOpen || playback?.fullActive == true) {
+                if (reordering && !menuOpen && playback?.fullActive != true && handleReorderKey(event)) {
+                    true
+                } else if (event.key != Key.Back || menuOpen || playback?.fullActive == true) {
                     // Full screen: the host routes Back, wherever focus is (#16).
                     false
                 } else if (playback?.playingStreamId != null) {
@@ -763,12 +838,14 @@ private fun LiveTvContent(
                 visibleCategoryCount = state.visibleCategoryCount,
             ),
             onBack = onBack,
-            onSearchClick = onSearchClick,
-            onMoreClick = onOpenMoreMenu,
+            // #221: Search and More step aside in reorder mode.
+            onSearchClick = if (reordering) null else onSearchClick,
+            onMoreClick = if (reordering) null else onOpenMoreMenu,
             moreFocusRequester = moreButtonFocus,
             modifier = Modifier
                 .offsetPx(HEADER_X_PX, HEADER_Y_PX)
                 .width(d.px(HEADER_WIDTH_PX))
+                .focusProperties { canFocus = !reordering }
                 // Down from any header control goes to the body on purpose. Left to
                 // Compose's geometric search it could land on nothing (QA on #51).
                 .onPreviewKeyEvent { event ->
@@ -788,7 +865,7 @@ private fun LiveTvContent(
             trailing = {
                 // Spec #7 section 3.4 / 3.6: the day picker (Guide view only), then
                 // the Guide | List toggle.
-                if (!state.isLoading) {
+                if (!state.isLoading && !reordering) {
                     if (guideMode) {
                         HeaderSegments(
                             labels = GuideDay.entries.map { it.label },
@@ -815,6 +892,7 @@ private fun LiveTvContent(
             focusedGuide = focusedGuide,
             focusedChannelId = focusedChannelId,
             focusedCategory = focusedCategory,
+            reorder = reorder,
             loadProgram = loadProgram,
             // F-48: while a channel plays the slot paints nothing; the player's surface owns it.
             showPreviewArt = playback?.playingStreamId == null,
@@ -859,11 +937,19 @@ private fun LiveTvContent(
                         guideDialog = dialogFor(row, block, System.currentTimeMillis())
                         dialogReturn = from
                     },
+                    reordering = reordering,
+                    reorderSelectedId = reorder?.selectedId,
                     onPlayChannel = { channel ->
-                        state.channels.firstOrNull { it.stream.id == channel.streamId }?.let { onPlayChannel(it.stream) }
+                        if (reordering) {
+                            onReorderOk(channel.streamId)
+                        } else {
+                            state.channels.firstOrNull { it.stream.id == channel.streamId }?.let { onPlayChannel(it.stream) }
+                        }
                     },
                     onChannelLongPress = { channel ->
-                        state.channels.firstOrNull { it.stream.id == channel.streamId }?.let { onLongPressChannel(it.stream) }
+                        if (!reordering) {
+                            state.channels.firstOrNull { it.stream.id == channel.streamId }?.let { onLongPressChannel(it.stream) }
+                        }
                     },
                     onLeftFromGrid = ::fanOutRail,
                     onFocused = { target ->
@@ -887,7 +973,7 @@ private fun LiveTvContent(
                     onOpenGuideSettings = onOpenGuideSettings,
                     entryFocus = listFocus,
                     menuRowFocus = menuRowFocus,
-                    menuChannelId = channelMenu?.id ?: focusAfterRemoveId ?: restoreRowId,
+                    menuChannelId = channelMenu?.id ?: removal.focusKey ?: restoreRowId ?: reorder?.selectedId,
                     restoreTarget = dialogReturn,
                     restoreTick = restoreTick,
                     screenHasFocus = screenHasFocus,
@@ -900,9 +986,10 @@ private fun LiveTvContent(
                 state = state,
                 content = content,
                 keepOpen = keepOpen,
-                onPlay = onPlayChannel,
+                onPlay = { stream -> if (reordering) onReorderOk(stream.id) else onPlayChannel(stream) },
                 onToggleFavorite = toggleFavorite,
-                onLongPress = onLongPressChannel,
+                onLongPress = { stream -> if (!reordering) onLongPressChannel(stream) },
+                reorder = reorder,
                 onChannelFocused = {
                     focusedChannelId.value = it
                     focusedSelection = currentState.selectedSelection
@@ -911,14 +998,14 @@ private fun LiveTvContent(
                 onShowHiddenChannels = { onShowHiddenChannels(true) },
                 onSelectAllChannels = { selectCategory(LiveCategorySelection.AllChannels) },
                 onRefreshChannels = onRefreshChannels,
-                takeFocusOnEmpty = emptyStateTakeFocus,
+                takeFocusOnEmpty = removal.emptiedTo == EmptyFocus.EmptyState,
                 listFocus = listFocus,
                 onLoadMore = onLoadMoreChannels,
                 // The row that holds the menu open keeps the requester, so
                 // closing the menu can hand focus straight back to it. After a
                 // remove (F-53) or hide that row is gone, so the requester moves
-                // to the row that takes its place (see `focusAfterRemoveId`).
-                focusRowId = channelMenu?.id ?: focusAfterRemoveId ?: restoreRowId ?: returnRowId,
+                // to the row that takes its place (see `removal`).
+                focusRowId = channelMenu?.id ?: removal.focusKey ?: restoreRowId ?: returnRowId ?: reorder?.selectedId,
                 menuRowFocus = menuRowFocus,
                 modifier = Modifier
                     .offset(x = -d.px(BREATHING_ROOM_PX), y = -d.px(BREATHING_ROOM_PX))
@@ -1040,11 +1127,11 @@ private fun LiveTvContent(
             // this path is guarded and a dead focus restore never kills the
             // close.
             val dismissMenu: () -> Unit = {
-                if (!menuRowFocus.tryRequestFocus()) fanOutRail()
+                if (!menuRowFocus.tryRequest()) fanOutRail()
                 onCloseChannelMenu()
             }
             HtPopupMenu(
-                title = channelMenuTitle(stream),
+                title = channelMenuTitle(stream, state.channels.firstOrNull { it.stream.id == stream.id }?.position),
                 onDismiss = dismissMenu,
                 anchorX = CHANNEL_MENU_X_PX,
                 anchorY = anchorY,
@@ -1059,19 +1146,9 @@ private fun LiveTvContent(
                         label = "Remove from recently watched",
                         icon = Icons.Filled.Delete,
                         onClick = {
-                            // Hand focus to the row below the removed one (or
-                            // the one above when it was last) *before* the list
-                            // shrinks — the usual handback row is the one
-                            // leaving composition.
-                            val rows = state.channels
-                            val index = rows.indexOfFirst { it.stream.id == stream.id }
-                            val next = rows.getOrNull(index + 1) ?: rows.getOrNull(index - 1)
-                            focusAfterRemoveId = next?.stream?.id
-                            if (next == null) {
-                                // F-57: last row — list goes empty. Let the
-                                // empty state's CTA take focus.
-                                emptyStateTakeFocus = true
-                            }
+                            // F-53 / F-57: focus goes to the row that takes this one's place; the
+                            // last row leaves the empty state's action focused instead of the rail.
+                            removal.removed(stream.id, whenEmpty = EmptyFocus.EmptyState)
                             onRemoveFromRecentlyWatched(stream)
                         },
                         focusRequester = menuItemFocus,
@@ -1095,6 +1172,18 @@ private fun LiveTvContent(
                         dismissMenu()
                     },
                 )
+                // #221: Favorites only.
+                if (state.selectedSelection is LiveCategorySelection.Favorites && stream.id in state.favoriteIds) {
+                    HtMenuItem(
+                        label = "Reorder channels",
+                        icon = Icons.Filled.SwapVert,
+                        onClick = {
+                            // Focus goes back to the row before the menu leaves, as for every way out.
+                            if (!menuRowFocus.tryRequest()) fanOutRail()
+                            onStartReorder()
+                        },
+                    )
+                }
                 if (stream.tvArchive) {
                     HtMenuItem(
                         label = "Watch from the start",
@@ -1193,8 +1282,8 @@ private fun ReportLiveTvTimings(state: LiveTvUiState, ready: Boolean, epgByRows:
 }
 
 /** "101 · Northbay News" — the channel menu's header. */
-private fun channelMenuTitle(stream: LiveStream): String =
-    if (stream.num != null) "${stream.num} · ${stream.name}" else stream.name
+private fun channelMenuTitle(stream: LiveStream, position: Int? = null): String =
+    (position ?: stream.num)?.let { "$it · ${stream.name}" } ?: stream.name
 
 /**
  * The header subtitle (spec #7 section 2): "News · 86 channels" for the
@@ -1286,6 +1375,123 @@ internal fun railItemInfo(item: LiveCategoryItem): Pair<String, Int>? = when (it
  * purpose): it arrives as one single-row read for the focused program, debounced on
  * focus changes and off the main thread, and fills in under the title.
  */
+/**
+ * #221: the mode panel, in the info band's place while Favorites is being reordered: what the mode
+ * is, what OK and Back do next, and where the selected channel is. The preview beside it keeps
+ * playing what it had.
+ */
+@Composable
+internal fun ReorderPanel(reorder: ReorderUi, channels: List<LiveChannelRow>) {
+    val d = browseDesign()
+    val type = browseType()
+    fun nameOf(id: String) = channels.firstOrNull { it.stream.id == id }?.stream?.name.orEmpty()
+    val notice = reorder.notice
+    val selected = reorder.selectedId
+    val title: String
+    val line: String?
+    val hints: List<Pair<String, String>>
+    when {
+        selected != null -> {
+            title = "Moving ${nameOf(selected)}"
+            line = "Position ${reorder.position} of ${reorder.total}" +
+                if (reorder.startPosition != reorder.position) " \u00B7 was ${reorder.startPosition}" else ""
+            hints = listOf("Up / Down" to "to move", "OK" to "to place", "Back" to "to cancel")
+        }
+        notice != null && notice.kind == ReorderNotice.Kind.PLACED -> {
+            title = "Placed ${nameOf(notice.channelId)} at ${notice.position}"
+            line = "Saved. It is now ${notice.position} of ${reorder.total}."
+            hints = listOf("OK" to "to select channel", "Back" to "to finish")
+        }
+        notice != null -> {
+            title = "${nameOf(notice.channelId)} is back at ${notice.position}"
+            line = "Nothing changed."
+            hints = listOf("OK" to "to select channel", "Back" to "to finish")
+        }
+        else -> {
+            title = "Choose a channel to move"
+            line = null
+            hints = listOf("OK" to "to select channel", "Back" to "to finish")
+        }
+    }
+    Column(
+        modifier = Modifier
+            .offsetPx(INFO_X_PX, INFO_TOP_PX)
+            .size(width = d.px(INFO_WIDTH_PX), height = d.px(INFO_HEIGHT_PX))
+            .padding(top = d.px(24))
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.Top,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.SwapVert,
+                contentDescription = null,
+                tint = HappyTvColors.Accent,
+                modifier = Modifier.size(d.px(30)),
+            )
+            Spacer(Modifier.width(d.px(12)))
+            Text(
+                text = "Reordering favorites",
+                style = type.compactCaptionSemibold,
+                color = HappyTvColors.Accent,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.height(d.px(6)))
+        Text(
+            text = title,
+            style = type.compactTitle,
+            color = HappyTvColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (line != null) {
+            Text(
+                text = line,
+                style = type.compactCaption.tabular(),
+                color = HappyTvColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.height(d.px(16)))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            hints.forEach { (key, label) ->
+                ReorderKeyHint(key = key, label = label)
+                Spacer(Modifier.width(d.px(32)))
+            }
+        }
+        if (selected != null) {
+            // The fast jumps, only while a channel is selected: Left or Rewind, Right or Fast-forward.
+            Spacer(Modifier.height(d.px(12)))
+            Text(
+                text = "Left or Rewind to top \u00B7 Right or Fast-forward to bottom",
+                style = type.compactCaption,
+                color = HappyTvColors.TextTertiary,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReorderKeyHint(key: String, label: String) {
+    val d = browseDesign()
+    val type = browseType()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = key,
+            style = type.compactCaptionSemibold,
+            color = HappyTvColors.TextPrimary,
+            maxLines = 1,
+            modifier = Modifier
+                .background(HappyTvColors.Overlay, RoundedCornerShape(d.px(12)))
+                .padding(horizontal = d.px(14), vertical = d.px(6)),
+        )
+        Spacer(Modifier.width(d.px(12)))
+        Text(text = label, style = type.compactCaption, color = HappyTvColors.TextSecondary, maxLines = 1)
+    }
+}
+
 @Composable
 internal fun InfoBand(category: LiveCategoryItem?, info: InfoBandUi?, description: String?) {
     val d = browseDesign()
@@ -1371,7 +1577,8 @@ internal data class InfoQuery(
 /** The info band for a focused list row: the now line the row already carries. */
 internal fun infoTargetForList(row: LiveChannelRow, nowUtcMillis: Long): InfoTarget {
     val stream = row.stream
-    val line = channelLineOf(stream.num, stream.name)
+    // #221: Favorites shows its position (1 to N) everywhere, as its rows do.
+    val line = channelLineOf(row.position ?: stream.num, stream.name)
     val title = row.nowTitle ?: return InfoTarget(infoBandNoGuide(line), query = null)
     return InfoTarget(
         band = InfoBandUi(
@@ -1405,7 +1612,8 @@ internal fun List<LiveChannelRow>.toGuideChannels(categories: List<LiveCategoryI
         val categoryName = names[stream.categoryId]
         GuideChannel(
             streamId = stream.id,
-            num = stream.num,
+            // #221: Favorites numbers its rows 1 to N instead of showing the provider's number.
+            num = row.position ?: stream.num,
             name = stream.name,
             genre = knownGenre(categoryName),
             isFavorite = row.isFavorite,
@@ -1509,6 +1717,7 @@ private fun ChannelPane(
     onPlay: (LiveStream) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onLongPress: (LiveStream) -> Unit,
+    reorder: ReorderUi?,
     onChannelFocused: (String) -> Unit,
     onLeftFromChannels: () -> Unit,
     onShowHiddenChannels: () -> Unit,
@@ -1604,6 +1813,9 @@ private fun ChannelPane(
                 onPlay = { onPlay(row.stream) },
                 onToggleFavorite = { onToggleFavorite(row.stream.id) },
                 onLongPress = { onLongPress(row.stream) },
+                reordering = reorder != null,
+                moving = reorder?.selectedId == row.stream.id,
+                total = reorder?.total ?: 0,
                 onFocused = { onChannelFocused(row.stream.id) },
                 onLeft = onLeftFromChannels,
                 // Only the menu's channel carries the requester, so focusing
@@ -1634,14 +1846,20 @@ private fun ChannelRow(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
     firstRowFocus: FocusRequester? = null,
+    /** #221: reorder mode; [moving] is the selected row, [total] the number of favorites. */
+    reordering: Boolean = false,
+    moving: Boolean = false,
+    total: Int = 0,
 ) {
     val d = browseDesign()
     val type = browseType()
     val stream = row.stream
     // "Northbay News, channel 101, now Headline report until 9:00, replay available"
+    val number = row.position ?: stream.num
     val readerLabel = buildString {
         append(stream.name)
-        stream.num?.let { append(", channel $it") }
+        number?.let { append(", ${if (row.position != null) "position" else "channel"} $it") }
+        if (moving) append(", selected")
         val now = listOfNotNull(row.nowTitle, row.nowUntilLabel).joinToString(" ")
         if (now.isNotEmpty()) append(", now $now")
         if (stream.tvArchive) append(", replay available")
@@ -1674,9 +1892,9 @@ private fun ChannelRow(
                 )
                 .htvClickableSurface(
                     radiusPx = 16,
-                    background = HappyTvColors.Surface,
+                    background = if (moving) HappyTvColors.Accent else HappyTvColors.Surface,
                     onClick = onPlay,
-                    onLongClick = onLongPress,
+                    onLongClick = if (reordering) null else onLongPress,
                     onFocused = onFocused,
                 )
                 .semantics { contentDescription = readerLabel }
@@ -1685,9 +1903,9 @@ private fun ChannelRow(
         ) {
             Box(modifier = Modifier.width(d.px(CHANNEL_NUMBER_COLUMN_PX))) {
                 Text(
-                    text = stream.num?.toString().orEmpty(),
+                    text = number?.toString().orEmpty(),
                     style = type.compactCaptionSemibold.tabular(),
-                    color = HappyTvColors.TextTertiary,
+                    color = if (moving) HappyTvColors.OnAccent else HappyTvColors.TextTertiary,
                     maxLines = 1,
                     softWrap = false,
                 )
@@ -1708,20 +1926,37 @@ private fun ChannelRow(
                 Text(
                     text = stream.name,
                     style = type.compactRowName,
-                    color = HappyTvColors.TextPrimary,
+                    color = if (moving) HappyTvColors.OnAccent else HappyTvColors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (stream.tvArchive) {
+                if (moving) {
+                    // "3 of 18": where it is now.
+                    Spacer(Modifier.width(d.px(14)))
+                    Text(
+                        text = "${row.position ?: 0} of $total",
+                        style = type.compactCaptionSemibold.tabular(),
+                        color = HappyTvColors.Accent,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier
+                            .background(HappyTvColors.OnAccent, RoundedCornerShape(d.px(20)))
+                            .padding(horizontal = d.px(16), vertical = d.px(4)),
+                    )
+                } else if (stream.tvArchive) {
                     Spacer(Modifier.width(d.px(12)))
                     ReplayChip(compact = true)
                 }
             }
             Spacer(Modifier.width(d.px(24)))
-            NowLine(row = row, modifier = Modifier.weight(NOW_WEIGHT))
+            NowLine(row = row, modifier = Modifier.weight(NOW_WEIGHT), onAccent = moving)
         }
-        StarButton(isFavorite = row.isFavorite, onClick = onToggleFavorite)
+        if (reordering) {
+            ReorderHandle(moving = moving, atTop = row.position == 1, atBottom = row.position == total)
+        } else {
+            StarButton(isFavorite = row.isFavorite, onClick = onToggleFavorite)
+        }
     }
 }
 
@@ -1730,7 +1965,7 @@ private fun ChannelRow(
  * the program title gives way first (design spec "Typeface > Truncation").
  */
 @Composable
-private fun NowLine(row: LiveChannelRow, modifier: Modifier = Modifier) {
+private fun NowLine(row: LiveChannelRow, modifier: Modifier = Modifier, onAccent: Boolean = false) {
     val type = browseType()
     if (row.nowTitle == null) {
         Text(
@@ -1746,7 +1981,7 @@ private fun NowLine(row: LiveChannelRow, modifier: Modifier = Modifier) {
         Text(
             text = row.nowTitle,
             style = type.compactCaption,
-            color = HappyTvColors.TextSecondary,
+            color = if (onAccent) HappyTvColors.OnAccent else HappyTvColors.TextSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
@@ -1759,6 +1994,54 @@ private fun NowLine(row: LiveChannelRow, modifier: Modifier = Modifier) {
             softWrap = false,
             overflow = TextOverflow.Visible,
         )
+    }
+}
+
+/**
+ * #221: the 56 x 56 slot at the end of a row while reordering (it takes no focus): a quiet grip on
+ * every row, and on the selected one an accent pill with the two chevrons, dimmed where the
+ * channel cannot go any further.
+ */
+@Composable
+private fun ReorderHandle(moving: Boolean, atTop: Boolean, atBottom: Boolean) {
+    val d = browseDesign()
+    if (!moving) {
+        Box(modifier = Modifier.size(d.px(56)), contentAlignment = Alignment.Center) {
+            GripDots(color = HappyTvColors.TextTertiary, sizePx = 30)
+        }
+        return
+    }
+    Column(
+        modifier = Modifier
+            .size(width = d.px(56), height = d.px(56))
+            .background(HappyTvColors.Accent, RoundedCornerShape(d.px(28))),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowUp,
+            contentDescription = null,
+            tint = HappyTvColors.OnAccent.copy(alpha = if (atTop) 0.35f else 1f),
+            modifier = Modifier.size(d.px(26)),
+        )
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = HappyTvColors.OnAccent.copy(alpha = if (atBottom) 0.35f else 1f),
+            modifier = Modifier.size(d.px(26)),
+        )
+    }
+}
+
+/** #221: the mockup's grip, six dots in two columns of three. */
+@Composable
+internal fun GripDots(color: Color, sizePx: Int, modifier: Modifier = Modifier) {
+    val d = browseDesign()
+    Canvas(modifier = modifier.size(d.px(sizePx))) {
+        val unit = size.minDimension / 24f
+        for (x in listOf(9f, 15f)) for (y in listOf(6f, 12f, 18f)) {
+            drawCircle(color = color, radius = 1.7f * unit, center = Offset(x * unit, y * unit))
+        }
     }
 }
 
@@ -1820,7 +2103,7 @@ private fun ChannelPaneEmptyState(
     // chain, which is the CTA button inside the empty state.
     val focusedButton = remember { FocusRequester() }
     LaunchedEffect(takeFocus) {
-        if (takeFocus) focusedButton.tryRequestFocus()
+        if (takeFocus) focusedButton.tryRequest()
     }
     Box(
         modifier = modifier
@@ -2111,8 +2394,12 @@ private const val CATEGORY_MENU_Y_PX = BODY_TOP_PX
 private const val EMPTY_STATE_TOP_PX = 136
 
 /** The channel menu's hide item: "Unhide channel" when the channel is already hidden (#123). */
-/** #171: the toggle removes the only row of the Favorites pane, which then shows its empty state. */
-internal fun removesLastFavorite(selection: LiveCategorySelection, rowCount: Int, isFavorite: Boolean): Boolean =
-    selection is LiveCategorySelection.Favorites && isFavorite && rowCount == 1
-
 internal fun hideChannelLabel(hidden: Boolean): String = if (hidden) "Unhide channel" else "Hide channel"
+
+/** #224: the list a channel played from [this] selection steps through; Recently watched has no stable order, so it follows the channel's own category. */
+internal fun LiveCategorySelection.toChannelListSource(): ChannelListSource = when (this) {
+    LiveCategorySelection.Favorites -> ChannelListSource.Favorites
+    LiveCategorySelection.AllChannels -> ChannelListSource.AllChannels
+    is LiveCategorySelection.Category -> ChannelListSource.Category(categoryId)
+    LiveCategorySelection.RecentlyWatched, LiveCategorySelection.NothingPicked -> ChannelListSource.OwnCategory
+}

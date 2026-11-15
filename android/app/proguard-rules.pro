@@ -1,6 +1,5 @@
 # HappyTV ProGuard/R8 rules.
-# Shared by the `benchmark` build (minify on) and `release` (minify still off;
-# these rules apply as soon as it is turned on).
+# Shared by the `benchmark` and `release` builds (both minify with R8).
 
 # ------------------------------------------------------------------
 # Kotlinx Serialization
@@ -37,7 +36,6 @@
 -dontwarn androidx.media3.**
 -keep class androidx.media3.exoplayer.source.** { *; }
 -keep class androidx.media3.exoplayer.drm.** { *; }
--keep class androidx.media3.session.** { *; }
 -keep class androidx.media3.common.util.UnstableApi { *; }
 
 # ------------------------------------------------------------------

@@ -18,8 +18,8 @@ import com.rysal.happytv.ui.theme.HappyTvTheme
  *
  * A **modal overlay**, not a screen: the window is translucent (see
  * `Theme.HappyTv.Search`), so the dashboard — or Live TV, Movies or Shows —
- * stays visible behind the overlay's 70% black scrim. Which screen opened it
- * decides the starting scope, passed in [EXTRA_SCOPE]; from the dashboard it
+ * stays alive behind the overlay, which draws its own opaque scrim (Ground, #67).
+ * Which screen opened it decides the starting scope, passed in [EXTRA_SCOPE]; from the dashboard it
  * searches everything.
  */
 class SearchActivity : ComponentActivity() {

@@ -88,8 +88,8 @@ object UnencryptedSignInCopy {
 
 /** #19: the backup switch. Sign-in details are never in the backup, in either state. */
 object BackupCopy {
-    const val LABEL = "Back up favorites and history"
-    const val CAPTION_ON = "Saved with your Google account backup. Sign-in details are never backed up."
+    const val LABEL = "Automatic Google backup"
+    const val CAPTION_ON = "Your Google account backs up favorites, hidden items and settings automatically and restores them when HappyTV is reinstalled. Sign-in details are never backed up."
     const val CAPTION_OFF = "Off. Nothing is saved, and the next scheduled backup replaces an older one. Sign-in details are never backed up."
 }
 

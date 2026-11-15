@@ -8,6 +8,9 @@ import androidx.compose.ui.focus.focusRequester
 /** How long a "give this node focus" request keeps trying before it gives up. */
 const val FOCUS_WAIT_TIMEOUT_MS = 2_000L
 
+/** How long a recorded removal waits for its list to drop the item before it is forgotten (#242). */
+const val REMOVAL_REFLECT_TIMEOUT_MS = 3_000L
+
 /**
  * Attaches [requester] (when there is one) to the chain.
  *

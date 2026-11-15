@@ -4,6 +4,7 @@ import android.content.Context
 import com.rysal.happytv.BuildConfig
 import com.rysal.happytv.data.guide.GuideRepository
 import com.rysal.happytv.data.guide.HttpXmlTvFetcher
+import com.rysal.happytv.data.network.RedirectGuard
 import com.rysal.happytv.data.network.RefreshCoordinator
 import com.rysal.happytv.data.network.buildXtreamApi
 import com.rysal.happytv.security.CleartextConsentStore
@@ -96,26 +97,39 @@ object Graph {
      * so those appear in debug logs only.
      */
     val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .apply {
-                if (BuildConfig.DEBUG) {
-                    // #17: BASIC only (request line + status), through the redactor,
-                    // because the API puts username and password in the query string.
-                    addInterceptor(
-                        HttpLoggingInterceptor { message ->
-                            android.util.Log.d(
-                                "HtvHttp",
-                                com.rysal.happytv.ui.player.PlayerUrlBuilder.redactCredentials(message),
-                            )
-                        }.apply { level = HttpLoggingInterceptor.Level.BASIC },
-                    )
-                }
-            }
-            .build()
+        buildXtreamClient(RedirectGuard.production(RedirectGuard.API))
     }
+
+    /**
+     * The Xtream API client, built from [guard] so tests can run the real
+     * client shape against MockWebServer (#237). [guard] refuses an HTTPS to
+     * HTTP redirect that would carry the sign-in details; OkHttp's own
+     * redirect following stays on, so every other redirect works as before.
+     */
+    internal fun buildXtreamClient(
+        guard: okhttp3.Interceptor,
+        configure: OkHttpClient.Builder.() -> Unit = {},
+    ): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .addNetworkInterceptor(guard)
+        .apply {
+            if (BuildConfig.DEBUG) {
+                // #17: BASIC only (request line + status), through the redactor,
+                // because the API puts username and password in the query string.
+                addInterceptor(
+                    HttpLoggingInterceptor { message ->
+                        android.util.Log.d(
+                            "HtvHttp",
+                            com.rysal.happytv.ui.player.PlayerUrlBuilder.redactCredentials(message),
+                        )
+                    }.apply { level = HttpLoggingInterceptor.Level.BASIC },
+                )
+            }
+        }
+        .apply(configure)
+        .build()
 
     /**
      * Our one JSON stack: kotlinx.serialization (Moshi was the alternative,
@@ -266,12 +280,18 @@ object Graph {
             credentials = securedCredentials,
             bulk = BackgroundWork.bulk,
             afterSignIn = { householdBackup.importIfPending() },
+            onSignOut = { HttpXmlTvFetcher.deleteLegacyHttpCache(requireContext()) },
         )
     }
 
     /** #19: the household backup file, its export and its one-time restore import. */
     val householdBackup: com.rysal.happytv.backup.HouseholdBackup by lazy {
-        com.rysal.happytv.backup.HouseholdBackup(database, settings, requireContext().filesDir)
+        com.rysal.happytv.backup.HouseholdBackup(
+            database,
+            settings,
+            requireContext().filesDir,
+            appVersion = BuildConfig.VERSION_NAME,
+        )
     }
 
     // --------------------------------------------------------------- guide

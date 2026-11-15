@@ -35,17 +35,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -54,6 +48,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.rysal.happytv.ui.browse.htvClickableSurface
+import com.rysal.happytv.ui.focus.htvFocusTarget
+import com.rysal.happytv.ui.focus.isOk
 import com.rysal.happytv.ui.theme.HappyTvAppIcon
 import com.rysal.happytv.ui.theme.HappyTvColors
 import com.rysal.happytv.ui.theme.HappyTvIcons
@@ -72,10 +69,11 @@ import com.rysal.happytv.ui.theme.tabular
  * the design rather than approximating it.
  *
  * D-pad order (handoff sticky note): saved servers → Server URL → Common URL
- * formats → Username → Password → eye → Remember me → Sign in → M3U playlist.
+ * formats → Username → Password → eye → Remember me → Sign in.
  * Each focus stop is a [FocusRequester]; the ViewModel asks for one through
  * [LoginUiState.focusTarget] after every state change that moves focus.
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun LoginScreen(
     state: LoginUiState,
@@ -86,7 +84,6 @@ fun LoginScreen(
     onSubmit: () -> Unit,
     onRetry: () -> Unit,
     onChangeServer: () -> Unit,
-    onM3uPressed: () -> Unit,
     onOpenUrlFormats: () -> Unit,
     onCloseUrlFormats: () -> Unit,
     onPickUrlFormat: (String) -> Unit,
@@ -106,7 +103,6 @@ fun LoginScreen(
     val eyeFocus = remember { FocusRequester() }
     val rememberFocus = remember { FocusRequester() }
     val submitFocus = remember { FocusRequester() }
-    val m3uFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
     val changeServerFocus = remember { FocusRequester() }
     val formatsHandles = remember { UrlFormatsDialogHandles() }
@@ -128,7 +124,6 @@ fun LoginScreen(
         LoginFocusTarget.Eye -> eyeFocus
         LoginFocusTarget.Remember -> rememberFocus
         LoginFocusTarget.Submit -> submitFocus
-        LoginFocusTarget.M3u -> m3uFocus
         LoginFocusTarget.Retry -> retryFocus
         LoginFocusTarget.ChangeServer -> changeServerFocus
         LoginFocusTarget.FormatOption -> formatsHandles.firstOption
@@ -173,7 +168,7 @@ fun LoginScreen(
     // "Hold OK to reveal the password; the eye turns accent while held."
     val holdReveal: Modifier = Modifier
         .onPreviewKeyEvent { event ->
-            val isOk = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
+            val isOk = event.isOk()
             when {
                 !isOk -> false
                 event.type == KeyEventType.KeyDown -> {
@@ -368,11 +363,13 @@ fun LoginScreen(
                             TvPrimaryButton(
                                 label = "Sign in",
                                 onClick = onSubmit,
+                                // Right goes to the saved servers when listed, else nowhere (#246).
+                                modifier = Modifier.focusProperties {
+                                    right = if (showRail) savedServerFocus else FocusRequester.Cancel
+                                },
                                 widthPx = SIGN_IN_WIDTH_PX,
                                 focusRequester = submitFocus,
                             )
-                            // The M3U button is focusable so it can explain itself.
-                            M3uButton(onClick = onM3uPressed, focusRequester = m3uFocus)
                         }
                     }
                 }
@@ -382,7 +379,6 @@ fun LoginScreen(
                     state.isUnreachable -> state.statusError.orEmpty()
                     signingIn -> "Signing in to ${state.serverUrl.ifBlank { "your server" }}…"
                     state.statusError != null -> state.statusError.orEmpty()
-                    state.infoLine != null -> state.infoLine.orEmpty()
                     else -> DEFAULT_STATUS_LINE
                 }
                 TvStatusLine(
@@ -543,47 +539,6 @@ private fun EyeButton(revealed: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
-/** The "M3U playlist" button with its v1.1 chip. */
-@Composable
-private fun M3uButton(onClick: () -> Unit, focusRequester: FocusRequester) {
-    val d = LocalHappyTvDesign.current
-    val typography = LocalHappyTvTypography.current
-    val radius = d.px(M3U_HEIGHT_PX / 2)
-    var focused by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier
-            .height(d.px(M3U_HEIGHT_PX))
-            // Ring first — a clip above it would erase it (F-33).
-            .happyTvFocusRing(focused = focused, radius = radius)
-            .clip(RoundedCornerShape(radius))
-            .background(HappyTvColors.Raised)
-            .onFocusChanged { focused = it.isFocused }
-            .focusRequester(focusRequester)
-            .focusable()
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyUp && event.key == Key.DirectionCenter) {
-                    onClick(); true
-                } else false
-            }
-            .padding(start = d.px(M3U_PADDING_START_PX), end = d.px(M3U_PADDING_END_PX)),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(d.px(M3U_GAP_PX)),
-    ) {
-        Text(text = "M3U playlist", style = typography.bodyBold, color = HappyTvColors.TextTertiary, maxLines = 1)
-        Box(
-            modifier = Modifier
-                .height(d.px(CHIP_HEIGHT_PX))
-                .clip(RoundedCornerShape(d.px(CHIP_HEIGHT_PX / 2)))
-                .background(HappyTvColors.Overlay)
-                .padding(horizontal = d.px(CHIP_PADDING_PX)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(text = "v1.1", style = typography.captionBold, color = HappyTvColors.TextSecondary, maxLines = 1)
-        }
-    }
-}
-
 /** The "Saved on this TV" list — label plus one 164 px button per server. */
 @Composable
 private fun SavedServersRail(
@@ -631,25 +586,17 @@ private fun SavedServerButton(
 ) {
     val d = LocalHappyTvDesign.current
     val typography = LocalHappyTvTypography.current
-    val radius = d.px(SAVED_SERVER_HEIGHT_PX / 2)
-    var focused by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
             .height(d.px(SAVED_SERVER_HEIGHT_PX))
-            // Ring first — a clip above it would erase the ring and the glow
-            // (F-33).
-            .happyTvFocusRing(focused = focused, radius = radius)
-            .clip(RoundedCornerShape(d.px(SAVED_SERVER_RADIUS_PX)))
-            .background(HappyTvColors.Surface)
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyUp && event.key == Key.DirectionCenter) {
-                    onClick(); true
-                } else false
-            }
+            // Before `htvClickableSurface`: a FocusRequester only finds targets after it.
+            .htvFocusTarget(focusRequester)
+            .htvClickableSurface(
+                radiusPx = SAVED_SERVER_RADIUS_PX,
+                background = HappyTvColors.Surface,
+                onClick = onClick,
+            )
             .padding(horizontal = d.px(SAVED_SERVER_PADDING_PX)),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.px(SAVED_SERVER_GAP_PX)),
@@ -766,12 +713,6 @@ private const val ACTION_ROW_TOP_MARGIN_PX = 32
 private const val BUTTON_GAP_PX = 24
 private const val SIGN_IN_WIDTH_PX = 360
 private const val STATUS_LINE_TOP_MARGIN_PX = 24
-private const val M3U_HEIGHT_PX = 88
-private const val M3U_PADDING_START_PX = 40
-private const val M3U_PADDING_END_PX = 28
-private const val M3U_GAP_PX = 16
-private const val CHIP_HEIGHT_PX = 40
-private const val CHIP_PADDING_PX = 14
 private const val HEADER_GAP_PX = 8
 private const val ICON_WORDMARK_GAP_PX = 16
 private const val APP_ICON_PX = 52

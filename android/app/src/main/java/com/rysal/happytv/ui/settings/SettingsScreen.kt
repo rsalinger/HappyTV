@@ -1,6 +1,9 @@
 package com.rysal.happytv.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +44,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import com.rysal.happytv.ui.focus.isOk
 import com.rysal.happytv.ui.theme.happyTvFocusRing
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
@@ -57,7 +61,7 @@ import com.rysal.happytv.data.BackWhileWatching
 import com.rysal.happytv.data.LiveTvOpenOn
 import com.rysal.happytv.ui.focus.awaitFocus
 import com.rysal.happytv.ui.focus.htvFocusTarget
-import com.rysal.happytv.ui.focus.indexAfterRemoval
+import com.rysal.happytv.ui.focus.rememberFocusAfterRemoval
 import com.rysal.happytv.ui.focus.tryRequest
 import com.rysal.happytv.ui.focus.requestWhenAttached
 import com.rysal.happytv.ui.browse.HEADER_BOTTOM_PX
@@ -90,8 +94,16 @@ fun SettingsScreen(
     onGoToSignIn: () -> Unit,
     viewModel: SettingsViewModel,
     modifier: Modifier = Modifier,
+    /** The Backup pane's flow; null shows only the automatic backup switch. */
+    backupViewModel: BackupViewModel? = null,
 ) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
+    val backupState = backupViewModel?.let { it.ui.collectAsStateWithLifecycle().value }
+    val context = LocalContext.current
+    val legacyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        backupViewModel?.refreshAccess()
+    }
+    if (backupViewModel != null) RefreshAccessOnResume(onResume = backupViewModel::refreshAccess)
     val d = browseDesign()
     val type = browseType()
 
@@ -130,7 +142,7 @@ fun SettingsScreen(
         focusSeeded = true
     }
 
-    val chain = settingsFocusChain(state, ::focusOf, leftTo = railRequester.getValue(state.section))
+    val chain = settingsFocusChain(state, backupState, ::focusOf, leftTo = railRequester.getValue(state.section))
 
     val dismissDialog: () -> Unit = { viewModel.dismissDialog() }
 
@@ -147,6 +159,19 @@ fun SettingsScreen(
     }
 
     BackHandler(enabled = state.dialog != null) { dismissDialog() }
+
+    // The Backup flow's overlay: Back closes it, except while a backup or restore is running.
+    val backupStep = backupState?.step
+    BackHandler(enabled = backupStep != null) { backupViewModel?.dismiss() }
+    var backupWasOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(backupStep == null) {
+        if (backupStep == null && backupWasOpen) {
+            val key = lastFocusedKey ?: (RAIL_KEY_PREFIX + state.section.extra)
+            val wanted = if (key == FOCUS_KEY_UNDO && backupState?.undoAvailable != true) FOCUS_KEY_BACKUP_NOW else key
+            if (!focusOf(wanted).tryRequest()) railRequester.getValue(state.section).tryRequest()
+        }
+        backupWasOpen = backupStep != null
+    }
     // #160: while sign-out clears the saved lists, Back does nothing rather than leave a half-signed-out screen.
     BackHandler(enabled = state.signingOut) { }
 
@@ -240,11 +265,23 @@ fun SettingsScreen(
                         focusOf = ::focusOf,
                         onRowFocused = { lastFocusedKey = it },
                     )
+                    SettingsSection.BACKUP -> BackupPane(
+                        state = state,
+                        viewModel = viewModel,
+                        backup = backupState,
+                        onStart = { action -> backupViewModel?.start(action) },
+                        onUndo = { backupViewModel?.startUndo() },
+                        focusOf = ::focusOf,
+                        onRowFocused = { lastFocusedKey = it },
+                    )
                     SettingsSection.ABOUT -> AboutPane(
                         focusOf = ::focusOf,
                         onRowFocused = { lastFocusedKey = it },
                         onReset = viewModel::resetToDefaults,
                         resetDone = state.resetDone,
+                        lastCrashMillis = backupState?.lastCrashMillis,
+                        crashReportCount = backupState?.crashReportCount ?: 0,
+                        onSaveCrashReports = { backupViewModel?.start(BackupAction.SAVE_CRASH_REPORTS) },
                     )
                 }
             }
@@ -253,6 +290,20 @@ fun SettingsScreen(
 
         if (state.signingOut) {
             SigningOutCard()
+        }
+
+        if (backupViewModel != null && backupStep != null) {
+            BackupOverlay(
+                step = backupStep,
+                viewModel = backupViewModel,
+                onContinueToAccess = {
+                    backupViewModel.accessExplained()
+                    val opened = openAccessScreen(context) {
+                        legacyPermission.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    }
+                    if (!opened) backupViewModel.accessScreenUnavailable()
+                },
+            )
         }
 
         state.dialog?.let { dialog ->
@@ -314,6 +365,7 @@ private fun SectionRow(
  */
 private fun settingsFocusChain(
     state: SettingsUiState,
+    backup: BackupUiState?,
     focusOf: (String) -> FocusRequester,
     leftTo: FocusRequester? = null,
 ): SettingsFocusChain {
@@ -326,15 +378,9 @@ private fun settingsFocusChain(
     val stops = when (state.section) {
         SettingsSection.ACCOUNT ->
             if (!state.signedIn || state.account == null) {
-                listOf(FOCUS_KEY_SIGN_IN, FOCUS_KEY_BACKUP).map(::single)
+                listOf(FOCUS_KEY_SIGN_IN).map(::single)
             } else {
-                // The switch sits after the read-only rows and before Switch account, so a stray OK
-                // from the row above can only toggle a harmless switch; Switch account itself
-                // only opens a confirmation.
-                listOf(
-                    FOCUS_KEY_SERVER, FOCUS_KEY_USERNAME, FOCUS_KEY_SIGNED_IN,
-                    FOCUS_KEY_BACKUP, FOCUS_KEY_SWITCH_ACCOUNT,
-                ).map(::single)
+                listOf(FOCUS_KEY_SERVER, FOCUS_KEY_USERNAME, FOCUS_KEY_SIGNED_IN, FOCUS_KEY_SWITCH_ACCOUNT).map(::single)
             }
         SettingsSection.REFRESH -> listOf(
             single(FOCUS_KEY_REFRESH_ON_START),
@@ -386,8 +432,16 @@ private fun settingsFocusChain(
             ),
             single(FOCUS_KEY_UNENCRYPTED_SIGN_IN),
         )
+        SettingsSection.BACKUP -> backupFocusKeys(backup).map(::single)
         SettingsSection.ABOUT ->
-            listOf(FOCUS_KEY_VERSION, FOCUS_KEY_BUILD, FOCUS_KEY_YOUR_DATA, FOCUS_KEY_RESET).map(::single)
+            listOf(
+                FOCUS_KEY_VERSION,
+                FOCUS_KEY_BUILD,
+                FOCUS_KEY_LAST_CRASH,
+                FOCUS_KEY_SAVE_CRASH_REPORTS,
+                FOCUS_KEY_YOUR_DATA,
+                FOCUS_KEY_RESET,
+            ).map(::single)
     }
     return SettingsFocusChain(stops, leftTo = leftTo)
 }
@@ -406,7 +460,6 @@ private fun AccountPane(
             onSignIn = viewModel::goToSignIn,
             focusRequester = focusOf(FOCUS_KEY_SIGN_IN),
         )
-        BackupRow(state, viewModel, focusOf, onRowFocused)
         return
     }
     SettingsInfoRow(
@@ -427,32 +480,12 @@ private fun AccountPane(
         onFocused = { onRowFocused(FOCUS_KEY_SIGNED_IN) },
         focusRequester = focusOf(FOCUS_KEY_SIGNED_IN),
     )
-    BackupRow(state, viewModel, focusOf, onRowFocused)
     SettingsActionRow(
         label = "Switch account",
         caption = "Signs you out of this server and clears its saved lists.",
         onClick = viewModel::switchAccount,
         onFocused = { onRowFocused(FOCUS_KEY_SWITCH_ACCOUNT) },
         focusRequester = focusOf(FOCUS_KEY_SWITCH_ACCOUNT),
-    )
-}
-
-/** #19: device-level, so it shows signed in or out (a restored install is signed out). */
-@Composable
-private fun BackupRow(
-    state: SettingsUiState,
-    viewModel: SettingsViewModel,
-    focusOf: (String) -> FocusRequester,
-    onRowFocused: (String) -> Unit,
-) {
-    val on = state.settings.backupHousehold
-    SettingsSwitchRow(
-        label = BackupCopy.LABEL,
-        caption = if (on) BackupCopy.CAPTION_ON else BackupCopy.CAPTION_OFF,
-        on = on,
-        onToggle = { viewModel.setBackupHousehold(!on) },
-        onFocused = { onRowFocused(FOCUS_KEY_BACKUP) },
-        focusRequester = focusOf(FOCUS_KEY_BACKUP),
     )
 }
 
@@ -604,13 +637,28 @@ private fun HiddenItemsPane(
     val d = browseDesign()
     val type = browseType()
     var focusedKey by remember { mutableStateOf<String?>(null) }
-    var focusTarget by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
-    LaunchedEffect(focusTarget) {
-        val target = focusTarget ?: return@LaunchedEffect
-        // The empty-state row only exists once its group has emptied: keep asking until it is there.
+    // #242: one holder per group; focus waits for the list to drop the unhidden row.
+    val categoryRemoval = rememberFocusAfterRemoval(state.hiddenCategories, { hiddenCategoryFocusKey(it) })
+    val channelRemoval = rememberFocusAfterRemoval(state.hiddenChannels, { hiddenChannelFocusKey(it) })
+    // The empty-state row only exists once its group has emptied: keep asking until it is there.
+    suspend fun land(target: String) =
         awaitFocus(landed = { focusedKey == target }, request = { focusOf(target).tryRequest() })
-        focusTarget = null
+    LaunchedEffect(categoryRemoval.focusKey) {
+        val target = categoryRemoval.focusKey ?: return@LaunchedEffect
+        land(target)
+        categoryRemoval.focusHandled()
+    }
+    LaunchedEffect(channelRemoval.focusKey) {
+        val target = channelRemoval.focusKey ?: return@LaunchedEffect
+        land(target)
+        channelRemoval.focusHandled()
+    }
+    LaunchedEffect(categoryRemoval.emptiedTo) {
+        if (categoryRemoval.emptiedTo != null) land(FOCUS_KEY_HIDDEN_NO_CATEGORIES)
+    }
+    LaunchedEffect(channelRemoval.emptiedTo) {
+        if (channelRemoval.emptiedTo != null) land(FOCUS_KEY_HIDDEN_NO_CHANNELS)
     }
     val onFocused: (String) -> Unit = { key ->
         focusedKey = key
@@ -663,8 +711,7 @@ private fun HiddenItemsPane(
                         label = "Show ${hidden.name}",
                         caption = "Hidden from ${hidden.catalogLabel}",
                         onClick = {
-                            focusTarget = categoryKeys.getOrNull(indexAfterRemoval(index, categoryKeys.size) ?: -1)
-                                ?: FOCUS_KEY_HIDDEN_NO_CATEGORIES
+                            categoryRemoval.removed(key)
                             viewModel.unhideCategory(hidden.id, hidden.type)
                         },
                         onFocused = { onFocused(key) },
@@ -696,8 +743,7 @@ private fun HiddenItemsPane(
                         label = channel.label,
                         caption = channel.caption,
                         onClick = {
-                            focusTarget = channelKeys.getOrNull(indexAfterRemoval(index, channelKeys.size) ?: -1)
-                                ?: FOCUS_KEY_HIDDEN_NO_CHANNELS
+                            channelRemoval.removed(key)
                             viewModel.unhideChannel(channel.id)
                         },
                         onFocused = { onFocused(key) },
@@ -759,6 +805,9 @@ private fun AboutPane(
     onRowFocused: (String) -> Unit,
     onReset: () -> Unit,
     resetDone: Boolean,
+    lastCrashMillis: Long?,
+    crashReportCount: Int,
+    onSaveCrashReports: () -> Unit,
 ) {
     SettingsInfoRow(
         label = "Version",
@@ -771,6 +820,21 @@ private fun AboutPane(
         value = BuildConfig.BUILD_TYPE.replaceFirstChar { it.uppercase() },
         onFocused = { onRowFocused(FOCUS_KEY_BUILD) },
         focusRequester = focusOf(FOCUS_KEY_BUILD),
+    )
+    // #259: local crash reports. Nothing is sent anywhere; "Save crash reports" copies them to the HappyTV folder.
+    SettingsInfoRow(
+        label = CrashReportsCopy.LAST_CRASH,
+        value = lastCrashMillis?.let(::backupWhenLabel) ?: CrashReportsCopy.NO_CRASHES,
+        onFocused = { onRowFocused(FOCUS_KEY_LAST_CRASH) },
+        focusRequester = focusOf(FOCUS_KEY_LAST_CRASH),
+    )
+    SettingsActionRow(
+        label = CrashReportsCopy.SAVE,
+        caption = if (crashReportCount > 0) CrashReportsCopy.SAVE_CAPTION else CrashReportsCopy.SAVE_CAPTION_NONE,
+        // Disabled at zero: the row stays reachable with the D-pad and OK does nothing.
+        onClick = { if (crashReportCount > 0) onSaveCrashReports() },
+        onFocused = { onRowFocused(FOCUS_KEY_SAVE_CRASH_REPORTS) },
+        focusRequester = focusOf(FOCUS_KEY_SAVE_CRASH_REPORTS),
     )
     SettingsInfoRow(
         label = "Your data",
@@ -853,9 +917,7 @@ internal fun XmltvLinkRow(
                 }
                 .focusable(enabled = !editing)
                 .onPreviewKeyEvent { event ->
-                    val isOk = event.key == Key.DirectionCenter ||
-                        event.key == Key.Enter ||
-                        event.key == Key.NumPadEnter
+                    val isOk = event.isOk()
                     when {
                         !editing && event.type == KeyEventType.KeyUp && isOk -> {
                             buffer = ""
@@ -1068,11 +1130,11 @@ private const val PANE_WIDTH_PX = 1160
 private const val PANE_TOP_PX = HEADER_BOTTOM_PX + 40
 private const val PANE_TOP_GAP_PX = 24
 private const val ROW_GAP_PX = 12
-private const val DIALOG_TOP_PX = 300
-private const val DIALOG_WIDTH_PX = 1040
-private const val DIALOG_RADIUS_PX = 32
-private const val DIALOG_SHADOW_PX = 40
-private const val DIALOG_SHADOW_ALPHA = 0.55f
+internal const val DIALOG_TOP_PX = 300
+internal const val DIALOG_WIDTH_PX = 1040
+internal const val DIALOG_RADIUS_PX = 32
+internal const val DIALOG_SHADOW_PX = 40
+internal const val DIALOG_SHADOW_ALPHA = 0.55f
 
 // --------------------------------------------------------------- focus keys
 
@@ -1106,10 +1168,11 @@ private const val HIDDEN_LIST_HEIGHT_PX = 1080 - PANE_TOP_PX - 40 - PANE_TOP_GAP
 private const val HIDDEN_GROUP_GAP_PX = 12
 private const val FOCUS_KEY_REPLAY_FROM_START = "player:replay-from-start"
 private const val FOCUS_KEY_UNENCRYPTED_SIGN_IN = "player:unencrypted-sign-in"
-private const val FOCUS_KEY_BACKUP = "account:backup"
 private const val FOCUS_KEY_ASPECT = "player:aspect:"
 private const val FOCUS_KEY_BACK_WHILE_WATCHING = "player:back-while-watching:"
 private const val FOCUS_KEY_VERSION = "about:version"
 private const val FOCUS_KEY_BUILD = "about:build"
+private const val FOCUS_KEY_LAST_CRASH = "about:last-crash"
+private const val FOCUS_KEY_SAVE_CRASH_REPORTS = "about:save-crash-reports"
 private const val FOCUS_KEY_YOUR_DATA = "about:your-data"
 private const val FOCUS_KEY_RESET = "about:reset"

@@ -129,13 +129,13 @@ class SettingsVerticalFocusTest {
     @Test
     fun accountPane_visitsEveryRowInOrder() = walk(
         SettingsSection.ACCOUNT,
-        listOf("Server", "Username", "Signed in", "Back up favorites and history", "Switch account"),
+        listOf("Server", "Username", "Signed in", "Switch account"),
     )
 
     @Test
     fun aboutPane_visitsEveryRowInOrder() = walk(
         SettingsSection.ABOUT,
-        listOf("Version", "Build", "Your data", "Reset to defaults"),
+        listOf("Version", "Build", "Last crash", "Save crash reports", "Your data", "Reset to defaults"),
     )
 
     @Test
@@ -167,7 +167,7 @@ class SettingsVerticalFocusTest {
     fun leftFromLastRefreshRow_returnsToRefresh() = leftReturnsToSection(SettingsSection.REFRESH, "Refresh on start", rowsDown = 2)
 
     @Test
-    fun leftFromLastAboutRow_returnsToAbout() = leftReturnsToSection(SettingsSection.ABOUT, "Version", rowsDown = 3)
+    fun leftFromLastAboutRow_returnsToAbout() = leftReturnsToSection(SettingsSection.ABOUT, "Version", rowsDown = 5)
 
     @Test
     fun leftFromHiddenItemsRow_returnsToHiddenItems() = leftReturnsToSection(SettingsSection.HIDDEN, "No hidden categories")

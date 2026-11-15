@@ -34,9 +34,6 @@ interface CleartextConsentStore {
     /** The stored answer, or null when the user has never been asked. */
     suspend fun decision(host: String, port: Int): CleartextDecision?
 
-    /** True once the user has answered for [host]:[port] — in either direction. */
-    suspend fun isConsented(host: String, port: Int): Boolean = decision(host, port) != null
-
     suspend fun remember(host: String, port: Int, decision: CleartextDecision)
 
     /** Settings screen "clear decisions" / tests. */

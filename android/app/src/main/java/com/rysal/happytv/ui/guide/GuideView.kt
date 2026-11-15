@@ -26,6 +26,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -48,6 +50,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.SolidColor
@@ -136,6 +139,12 @@ fun GuideBody(
     screenHasFocus: Boolean,
     healFocus: Boolean,
     modifier: Modifier = Modifier,
+    /**
+     * #221: Favorites is being reordered in place. The channel column takes the keys, program blocks
+     * take no focus and dim, and [reorderSelectedId] (when set) is the channel picked up.
+     */
+    reordering: Boolean = false,
+    reorderSelectedId: String? = null,
 ) {
     val d = browseDesign()
     val rows = guide.rows
@@ -466,6 +475,10 @@ fun GuideBody(
                     entryCell = entry == GuideFocus.ChannelCell(index),
                     entryProgramKey = (entry as? GuideFocus.Program)?.takeIf { it.row == index }?.startUtcMillis,
                     isMenuRow = row.channel.streamId == menuChannelId,
+                    reordering = reordering,
+                    moving = reorderSelectedId != null && row.channel.streamId == reorderSelectedId,
+                    atTop = index == 0,
+                    atBottom = index == rows.size - 1,
                 )
             }
         }
@@ -534,6 +547,9 @@ internal class GuideNavigator(
     val menuRequester: FocusRequester,
 )
 
+/** #221: how far the program rows of the channels that are not being moved dim. */
+private const val REORDER_DIM_ALPHA = 0.45f
+
 /** Gap blocks have no start time; their keys sit far below any program's epoch millis. */
 private const val GAP_KEY_BASE = -1L
 
@@ -574,6 +590,10 @@ private fun GuideRowUi(
     entryCell: Boolean,
     entryProgramKey: Long?,
     isMenuRow: Boolean,
+    reordering: Boolean,
+    moving: Boolean,
+    atTop: Boolean,
+    atBottom: Boolean,
 ) {
     val d = browseDesign()
     Row(
@@ -587,6 +607,10 @@ private fun GuideRowUi(
             nav = nav,
             entryFocus = nav.entryRequester.takeIf { entryCell },
             menuRowFocus = nav.menuRequester.takeIf { isMenuRow },
+            reordering = reordering,
+            moving = moving,
+            atTop = atTop,
+            atBottom = atBottom,
         )
         Box(modifier = Modifier.size(d.px(timelineWidth), d.px(ROW_HEIGHT_PX))) {
             row.blocks.forEach { block ->
@@ -603,6 +627,9 @@ private fun GuideRowUi(
                                 scale = scale,
                                 nav = nav,
                                 entryFocus = nav.entryRequester.takeIf { entryProgramKey == block.key },
+                                // #221: no focus while reordering; the other rows dim, the moving one does not.
+                                reordering = reordering,
+                                dimmed = reordering && !moving,
                             )
                         }
                         is GuideBlock.GapBlock -> GuideGapBlockUi(block = block, scale = scale)
@@ -622,14 +649,19 @@ internal fun GuideChannelCell(
     nav: GuideNavigator,
     entryFocus: FocusRequester?,
     menuRowFocus: FocusRequester?,
+    /** #221: reorder mode; [moving] is the picked-up channel. */
+    reordering: Boolean = false,
+    moving: Boolean = false,
+    atTop: Boolean = false,
+    atBottom: Boolean = false,
 ) {
     val d = browseDesign()
     val type = browseType()
     val channel = row.channel
     val reader = buildString {
         append(channel.name)
-        channel.num?.let { append(", channel $it") }
-        if (channel.isFavorite) append(", favorite")
+        channel.num?.let { append(", ${if (reordering) "position" else "channel"} $it") }
+        if (moving) append(", selected") else if (channel.isFavorite) append(", favorite")
     }
     var cellFocused by remember { mutableStateOf(false) }
     // #155: rows are keyed by channel, so a row above this one leaving (Hide channel) moves the
@@ -649,9 +681,9 @@ internal fun GuideChannelCell(
             .then(if (menuRowFocus != null) Modifier.focusRequester(menuRowFocus) else Modifier)
             .htvClickableSurface(
                 radiusPx = 12,
-                background = HappyTvColors.Surface,
+                background = if (moving) HappyTvColors.Accent else HappyTvColors.Surface,
                 onClick = { nav.play(channel) },
-                onLongClick = { nav.longPress(channel) },
+                onLongClick = if (reordering) null else ({ nav.longPress(channel) }),
                 focusedOverride = cellFocused,
             )
             .semantics { contentDescription = reader }
@@ -662,7 +694,7 @@ internal fun GuideChannelCell(
             Text(
                 text = channel.num?.toString().orEmpty(),
                 style = type.compactCaptionSemibold.tabular(),
-                color = HappyTvColors.TextTertiary,
+                color = if (moving) HappyTvColors.OnAccent else HappyTvColors.TextTertiary,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -691,7 +723,7 @@ internal fun GuideChannelCell(
         Text(
             text = channel.name,
             style = nameStyle,
-            color = HappyTvColors.TextPrimary,
+            color = if (moving) HappyTvColors.OnAccent else HappyTvColors.TextPrimary,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             // Unbounded height: Compose ellipsizes a Text to the lines that fit its max height,
@@ -701,7 +733,28 @@ internal fun GuideChannelCell(
                 .wrapContentHeight(Alignment.CenterVertically, unbounded = true)
                 .testTag(CHANNEL_NAME_TAG),
         )
-        if (channel.isFavorite) {
+        if (reordering) {
+            // #221: a grip on every row; the picked-up one shows which way it can still go.
+            Spacer(Modifier.width(d.px(8)))
+            if (moving) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = HappyTvColors.OnAccent.copy(alpha = if (atTop) 0.35f else 1f),
+                        modifier = Modifier.size(d.px(24)),
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = HappyTvColors.OnAccent.copy(alpha = if (atBottom) 0.35f else 1f),
+                        modifier = Modifier.size(d.px(24)),
+                    )
+                }
+            } else {
+                com.rysal.happytv.ui.browse.GripDots(color = HappyTvColors.TextTertiary, sizePx = 24)
+            }
+        } else if (channel.isFavorite) {
             Spacer(Modifier.width(d.px(8)))
             Icon(
                 imageVector = Icons.Filled.Star,
@@ -723,6 +776,8 @@ private fun GuideProgramBlockUi(
     scale: Float,
     nav: GuideNavigator,
     entryFocus: FocusRequester?,
+    reordering: Boolean = false,
+    dimmed: Boolean = false,
 ) {
     val onOpen = { nav.open(row, block, focus) }
     val d = browseDesign()
@@ -796,10 +851,12 @@ private fun GuideProgramBlockUi(
       }
     }
 
-    if (!block.focusable) {
+    if (!block.focusable || reordering) {
         // Ended with no replay: a static span, no focus stop (design spec rows).
         Box(
             modifier = shapeModifier
+                // #221: the other rows dim to 45% while a channel is being moved.
+                .then(if (dimmed) Modifier.graphicsLayer { this.alpha = REORDER_DIM_ALPHA } else Modifier)
                 .background(fill.copy(alpha = alpha), RoundedCornerShape(d.px(12))),
         ) { content() }
         return

@@ -112,6 +112,10 @@ abstract class CategoryDao {
     )
     abstract suspend fun reapplyHidden(type: StreamType)
 
+    /** #209: a local restore replaces the hidden set, so every flag is cleared before the new rows apply. */
+    @Query("UPDATE categories SET isHidden = 0 WHERE isHidden = 1")
+    abstract suspend fun clearHiddenFlags()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun insertAll(categories: List<Category>)
 

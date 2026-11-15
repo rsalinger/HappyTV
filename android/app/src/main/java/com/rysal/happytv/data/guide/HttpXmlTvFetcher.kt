@@ -8,14 +8,14 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Cache
+import com.rysal.happytv.data.network.RedirectGuard
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
  * Downloads the XMLTV file with the guards the tasks ask for
- * (§6 + F-52): an explicit **last-modified check**, an **OkHttp
- * `Cache(directory, maxSize)`** in front of the network, a **payload-size
+ * (§6 + F-52): an explicit **last-modified check**, a **payload-size
  * guard** on the response, and a **staged copy on disk** so the database
  * replace can be atomic (see below).
  *
@@ -23,9 +23,8 @@ import okhttp3.Request
  * when the server sends one) goes back as `If-Modified-Since` /
  * `If-None-Match`. A 304 means "your stored copy is current" — the caller
  * skips the multi-megabyte parse entirely ([stageIfModified] returns null).
- * The OkHttp cache additionally short-circuits to a locally fresh response
- * when the server sends cache directives (OkHttp performs its own
- * conditional revalidation on stale-but-validated entries).
+ * There is deliberately no OkHttp response cache (#237): it would write the
+ * request URL, which carries the username and password, to disk.
  *
  * **Size guard (F-52)**: a panel with 39k channels can serve XMLTV in the
  * hundreds of megabytes. A `Content-Length` over [maxBytes] is refused
@@ -41,9 +40,9 @@ import okhttp3.Request
  * connection mid-download deletes the temp file and leaves the stored
  * guide untouched — the old stream-straight-to-Room path had already run
  * `deleteAll()` by then, so one flaky refresh wiped the guide the user was
- * watching. The caller parses the staged file inside a Room transaction
- * (`EpgProgramDao.replaceAllStreamed`), which covers the other failure
- * mode (bad XML mid-parse).
+ * watching. The caller stages the parsed rows and promotes them only after the
+ * whole file parsed (F-65), which covers the other failure mode (bad XML
+ * mid-parse).
  *
  * State lives in a private `SharedPreferences` rather than `AppSettings`:
  * this is fetcher plumbing, not a user setting, and keeping it out of the
@@ -56,6 +55,10 @@ import okhttp3.Request
 class HttpXmlTvFetcher(
     context: Context,
     private val maxBytes: Long = MAX_XMLTV_BYTES,
+    /** #237: refuses an HTTPS to HTTP redirect that would carry the sign-in details. */
+    private val redirectGuard: Interceptor = RedirectGuard.production(RedirectGuard.GUIDE),
+    /** Test hook: extra client setup (for example a test TLS trust). */
+    private val configureClient: OkHttpClient.Builder.() -> Unit = {},
 ) {
 
     private val appContext = context.applicationContext
@@ -63,16 +66,20 @@ class HttpXmlTvFetcher(
         appContext.getSharedPreferences("guide_xmltv_cache", Context.MODE_PRIVATE)
 
     /**
-     * Own client (not `Graph.okHttpClient`): the response cache is specific
-     * to this one multi-MB file, and putting a `Cache` on the shared client
-     * would start caching panel API responses too.
+     * Own client (not `Graph.okHttpClient`): longer-lived guard wiring for
+     * this one multi-MB file. It has **no response cache** (#237): the guide
+     * URL carries the username and password in its query, and OkHttp writes
+     * the request URL into every cache entry, so a cache would keep the
+     * sign-in details on disk in plain text. The conditional GET below is
+     * done by hand and the body is staged by us, so a cache added nothing.
      */
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .cache(Cache(File(appContext.cacheDir, CACHE_DIR), CACHE_MAX_BYTES))
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .addNetworkInterceptor(redirectGuard)
+            .apply(configureClient)
             .build()
     }
 
@@ -199,8 +206,8 @@ class HttpXmlTvFetcher(
 
     companion object {
         private const val TAG = "HttpXmlTvFetcher"
-        private const val CACHE_DIR = "xmltv_http"
-        private const val CACHE_MAX_BYTES = 25L * 1024 * 1024
+        /** Folder of the OkHttp cache older builds kept (plain-text request URLs); now only deleted. */
+        private const val LEGACY_CACHE_DIR = "xmltv_http"
         private const val KEY_LAST_MODIFIED = "last_modified"
         private const val KEY_ETAG = "etag"
         private const val KEY_LAST_IMPORTED_AT = "last_imported_at"
@@ -220,6 +227,17 @@ class HttpXmlTvFetcher(
          * bounded either way — this cap is about disk and time, not heap.
          */
         const val MAX_XMLTV_BYTES = 256L * 1024 * 1024
+
+        /**
+         * Removes the on-disk HTTP cache older builds wrote (#237). Safe to
+         * call any time and from any thread; the caller picks a background one.
+         */
+        fun deleteLegacyHttpCache(context: Context) {
+            val dir = File(context.applicationContext.cacheDir, LEGACY_CACHE_DIR)
+            if (dir.exists() && !dir.deleteRecursively()) {
+                Log.w(TAG, "Could not fully remove the old guide HTTP cache")
+            }
+        }
 
         /** Log/exception-safe URL: the query string carries `password=…`. */
         private fun redact(url: String): String = url.substringBefore('?') + "?…"

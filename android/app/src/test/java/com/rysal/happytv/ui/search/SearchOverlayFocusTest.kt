@@ -199,8 +199,8 @@ class SearchOverlayFocusTest {
 
     private fun love(): Triple<List<SearchChannelRow>, List<SearchPosterRow>, List<SearchPosterRow>> = Triple(
         (1..96).map { SearchChannelRow(id = "c$it", name = "Love Channel $it", num = it) },
-        (1..30).map { SearchPosterRow(id = "m$it", name = "Love Movie $it", year = null) },
-        (1..30).map { SearchPosterRow(id = "s$it", name = "Love Show $it", year = "2020") },
+        (1..30).map { SearchPosterRow(id = "m$it", name = "Love Movie $it", year = null, num = it) },
+        (1..30).map { SearchPosterRow(id = "s$it", name = "Love Show $it", year = "2020", num = it) },
     )
 
     private fun startLove(scope: SearchScope = SearchScope.ALL) {

@@ -263,7 +263,7 @@ class SettingsViewModelTest {
     fun `Live TV is its own section between Refresh and Guide`() {
         val order = SettingsSection.entries.map { it.label }
         assertEquals(
-            listOf("Account", "Refresh", "Live TV", "Guide", "Hidden items", "Player", "About"),
+            listOf("Account", "Refresh", "Live TV", "Guide", "Hidden items", "Player", "Backup", "About"),
             order,
         )
         assertEquals(SettingsSection.LIVE_TV, SettingsSection.fromExtra("livetv"))
@@ -573,9 +573,9 @@ class SettingsViewModelTest {
 
     @Test
     fun `the backup copy says sign-in details are never backed up, in sentence case`() {
-        assertEquals("Back up favorites and history", BackupCopy.LABEL)
+        assertEquals("Automatic Google backup", BackupCopy.LABEL)
         assertEquals(
-            "Saved with your Google account backup. Sign-in details are never backed up.",
+            "Your Google account backs up favorites, hidden items and settings automatically and restores them when HappyTV is reinstalled. Sign-in details are never backed up.",
             BackupCopy.CAPTION_ON,
         )
         listOf(BackupCopy.LABEL, BackupCopy.CAPTION_ON, BackupCopy.CAPTION_OFF).forEach {

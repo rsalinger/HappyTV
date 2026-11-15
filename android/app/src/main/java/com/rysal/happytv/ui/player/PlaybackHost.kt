@@ -95,6 +95,12 @@ internal class PlaybackHost(
     /** The live channel that is playing (Full or Preview), or null when Idle. */
     val playingStreamIdFlow: StateFlow<String?> = _playingStreamId.asStateFlow()
 
+    /**
+     * #224: the list channel up/down walks, kept for the channel playing (and through zaps and recent-row
+     * picks). Set by [play]; Search and other launches without a list start on the channel's own category.
+     */
+    var channelList: ChannelListSource = ChannelListSource.OwnCategory
+
     val mode: HostMode get() = _mode.value
     val playingStreamId: String? get() = _playingStreamId.value
 
@@ -161,7 +167,8 @@ internal class PlaybackHost(
      * zap from the preview, or one from Search / the guide. Re-resolves and
      * re-points the same engine; nothing is rebuilt when one is attached.
      */
-    fun play(launch: PlayerLaunch) {
+    fun play(launch: PlayerLaunch, list: ChannelListSource = ChannelListSource.OwnCategory) {
+        channelList = list
         if (engine != null) HtvPerf.start(HtvPerf.PLAYER_ZAP)
         _playingStreamId.value = launch.streamId
         _mode.value = HostMode.Full
@@ -211,6 +218,7 @@ internal class PlaybackHost(
         HtvPerf.cancel(HtvPerf.PLAYER_BACK_PREVIEW)
         _mode.value = HostMode.Idle
         _playingStreamId.value = null
+        channelList = ChannelListSource.OwnCategory
         viewModel.stop()
         lifecycle.releaseForDestroy()
     }

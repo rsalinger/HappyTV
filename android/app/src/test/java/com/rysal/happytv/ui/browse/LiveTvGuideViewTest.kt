@@ -318,7 +318,7 @@ class LiveTvGuideViewTest {
         awaitNode(hasText("Watch now") and hasClickAction(), "the dialog's primary button")
         awaitNode(hasText("Watch from the start", substring = true), "the replay button (replay channel)")
         // Title, channel and the progress line are in the dialog.
-        awaitNode(hasText("100 · Northbay News"), "the dialog's channel line")
+        awaitNode(hasText("1 · Northbay News"), "the dialog's channel line")
     }
 
     @Test
@@ -435,7 +435,7 @@ class LiveTvGuideViewTest {
 
         // Band: channel line, title, time and status. The description arrives from the
         // single-row read after the debounce.
-        awaitNode(hasText("100 · Northbay News"), "the channel line")
+        awaitNode(hasText("1 · Northbay News"), "the channel line")
         awaitNode(hasText("On now", substring = true) and !hasClickAction(), "the status line")
         waitFor { nodeExists(hasText("The top stories of the hour.")) }
     }
@@ -793,8 +793,8 @@ class LiveTvGuideViewTest {
         waitFor("the hidden channel to leave the guide") { !nodeExists(northbayCell) }
         awaitFocus(capitalCell, "the row that took the hidden one's place")
         // The band describes the focused row (101), not the one after it (102).
-        awaitNode(hasText("101 · Capital Desk"), "the band's channel line")
-        assertFalse("the band must not describe the row after the focused one", nodeExists(hasText("102 · Harbor Live")))
+        awaitNode(hasText("1 · Capital Desk"), "the band's channel line")
+        assertFalse("the band must not describe the row after the focused one", nodeExists(hasText("2 · Harbor Live")))
 
         // Left into the rail and Right returns to the focused row, not the band's old index.
         pressFocused(Key.DirectionLeft)
@@ -821,9 +821,9 @@ class LiveTvGuideViewTest {
         assertTrue("a node holds focus", nodeExists(isFocused()))
     }
 
-    /** #171: removing the last favorite leaves the D-pad on the empty state's action. */
+    /** #171, changed by #227: removing the last favorite puts the D-pad on the rail's Favorites entry. */
     @Test
-    fun `removing the last favorite leaves focus on the empty state's action`() {
+    fun `removing the last favorite leaves focus on the rail's Favorites entry`() {
         startScreen(view = LiveTvView.LIST)
         runBlocking { db.favoriteDao().toggle("101", StreamType.LIVE) }
         waitFor("one favorite left") { !nodeExists(capitalCell) }
@@ -834,16 +834,113 @@ class LiveTvGuideViewTest {
 
         pressFocused(Key.DirectionCenter)
 
-        awaitNode(hasText("No favorites yet"), "the empty state")
-        awaitFocus(hasText("Browse all channels") and hasClickAction(), "the empty state's action")
+        // (The fanned-out rail's scrim hides the empty state from semantics, so only focus is checked.)
+        awaitFocus(clickable("Favorites"), "the rail's Favorites entry")
+    }
+
+    /** #221 QA, #227: the same, with the row's star button instead of the menu. */
+    @Test
+    fun `removing the last favorite with the star leaves focus on the rail's Favorites entry`() {
+        startScreen(view = LiveTvView.LIST)
+        runBlocking { db.favoriteDao().toggle("101", StreamType.LIVE) }
+        waitFor("one favorite left") { !nodeExists(capitalCell) }
+        val star = hasContentDescription("Remove from favorites") and hasClickAction()
+        takeFocus(star)
+
+        pressFocused(Key.DirectionCenter)
+
+        // (The fanned-out rail's scrim hides the empty state from semantics, so only focus is checked.)
+        awaitFocus(clickable("Favorites"), "the rail's Favorites entry")
+    }
+
+    /** #227: the guide view too (its only way to remove a favorite is the channel menu). */
+    @Test
+    fun `removing the last favorite in the guide leaves focus on the rail's Favorites entry`() {
+        startScreen(view = LiveTvView.GUIDE)
+        runBlocking { db.favoriteDao().toggle("101", StreamType.LIVE) }
+        waitFor("one favorite left") { !nodeExists(capitalCell) }
+        takeFocus(northbayCell)
+        compose.onNode(isFocused()).performKeyInput { pressKey(Key.Menu) }
+        awaitNode(hasText("Remove from favorites") and hasClickAction(), "the favorites item")
+        takeFocus(hasText("Remove from favorites") and hasClickAction())
+
+        pressFocused(Key.DirectionCenter)
+
+        awaitFocus(clickable("Favorites"), "the rail's Favorites entry")
+    }
+
+    private val harborCell get() = clickable("Harbor Live")
+
+    /** #230: star on list row [n] (0-based) of the three favorites, then wait for the row to leave. */
+    private fun removeListFavoriteWithStar(n: Int, gone: SemanticsMatcher) {
+        val star = hasContentDescription("Remove from favorites") and hasClickAction()
+        awaitNode(star, "the stars")
+        compose.onAllNodes(star)[n].performSemanticsAction(SemanticsActions.RequestFocus) { it?.invoke() }
+        waitFor("the star to hold focus") { nodeExists(isFocused() and star) }
+        pressFocused(Key.DirectionCenter)
+        waitFor("the favorite to leave") { !nodeExists(gone) }
+    }
+
+    /** #230: the channel menu's remove item on a guide cell. */
+    private fun removeGuideFavoriteWithMenu(cell: SemanticsMatcher, gone: SemanticsMatcher) {
+        takeFocus(cell)
+        compose.onNode(isFocused()).performKeyInput { pressKey(Key.Menu) }
+        val item = hasText("Remove from favorites") and hasClickAction()
+        awaitNode(item, "the favorites item")
+        takeFocus(item)
+        pressFocused(Key.DirectionCenter)
+        waitFor("the favorite to leave") { !nodeExists(gone) }
+    }
+
+    /** #230: removing a middle favorite focuses the row that took its place. */
+    @Test
+    fun `removing a middle favorite in the list focuses the next row`() {
+        startScreen(view = LiveTvView.LIST, thirdFavorite = true)
+        removeListFavoriteWithStar(1, capitalCell)
+        awaitFocus(harborCell, "the row now in the removed one's place")
+        assertFalse("the rail must not take focus", focused(clickable("Favorites")))
+    }
+
+    /** #230: removing the bottom favorite focuses the new bottom row. */
+    @Test
+    fun `removing the bottom favorite in the list focuses the new bottom row`() {
+        startScreen(view = LiveTvView.LIST, thirdFavorite = true)
+        removeListFavoriteWithStar(2, harborCell)
+        awaitFocus(capitalCell, "the new bottom row")
+        assertFalse("the rail must not take focus", focused(clickable("Favorites")))
     }
 
     @Test
-    fun `removesLastFavorite only fires for the only row of the Favorites pane`() {
-        assertTrue(removesLastFavorite(LiveCategorySelection.Favorites, rowCount = 1, isFavorite = true))
-        assertFalse(removesLastFavorite(LiveCategorySelection.Favorites, rowCount = 2, isFavorite = true))
-        assertFalse(removesLastFavorite(LiveCategorySelection.Favorites, rowCount = 1, isFavorite = false))
-        assertFalse(removesLastFavorite(LiveCategorySelection.AllChannels, rowCount = 1, isFavorite = true))
+    fun `removing a middle favorite in the guide focuses the next row`() {
+        startScreen(view = LiveTvView.GUIDE, thirdFavorite = true)
+        removeGuideFavoriteWithMenu(capitalCell, capitalCell)
+        awaitFocus(harborCell, "the row now in the removed one's place")
+        assertFalse("the rail must not take focus", focused(clickable("Favorites")))
+    }
+
+    @Test
+    fun `removing the bottom favorite in the guide focuses the new bottom row`() {
+        startScreen(view = LiveTvView.GUIDE, thirdFavorite = true)
+        removeGuideFavoriteWithMenu(harborCell, harborCell)
+        awaitFocus(capitalCell, "the new bottom row")
+        assertFalse("the rail must not take focus", focused(clickable("Favorites")))
+    }
+
+    /** #227: a favorite that is not the last keeps today's behavior: the D-pad stays in the list. */
+    @Test
+    fun `removing a favorite that is not the last keeps focus out of the rail`() {
+        startScreen(view = LiveTvView.LIST)
+        val star = hasContentDescription("Remove from favorites") and hasClickAction()
+        awaitNode(star, "the stars")
+        compose.onAllNodes(star)[0].performSemanticsAction(SemanticsActions.RequestFocus) { it?.invoke() }
+        waitFor("the first star to hold focus") { nodeExists(isFocused() and star) }
+
+        pressFocused(Key.DirectionCenter)
+
+        waitFor("the first favorite to leave") { !nodeExists(northbayCell) }
+        compose.waitForIdle()
+        assertTrue("the second favorite is still listed", nodeExists(capitalCell))
+        assertFalse("the rail must not take focus", focused(clickable("Favorites")))
     }
 
     private companion object {

@@ -134,12 +134,7 @@ class WatchProgressMigrationTest {
     private fun open(): HappyTvDatabase =
         Room.databaseBuilder(context, HappyTvDatabase::class.java, dbFile.name)
             // The production list, exactly: a v4 file must reach v5 through the app's own migrations.
-            .addMigrations(
-                HappyTvDatabase.MIGRATION_1_2,
-                HappyTvDatabase.MIGRATION_2_3,
-                HappyTvDatabase.MIGRATION_3_4,
-                HappyTvDatabase.MIGRATION_4_5,
-            )
+            .addMigrations(*HappyTvDatabase.ALL_MIGRATIONS)
             .build()
 
     private fun HappyTvDatabase.names(sql: String, column: Int = 0): List<String> =
@@ -149,12 +144,12 @@ class WatchProgressMigrationTest {
         openHelper.readableDatabase.query("SELECT COUNT(*) FROM `$table`").use { c -> c.moveToFirst(); c.getInt(0) }
 
     @Test
-    fun `a v4 file built from the exported schema opens as v5 with every row intact`() = runBlocking {
+    fun `a v4 file built from the exported schema opens as the current version with every row intact`() = runBlocking {
         buildV4Database()
         val db = open()
         try {
             // Opening validates the migrated file against the v5 schema; touching a table runs it.
-            assertEquals(5, db.openHelper.readableDatabase.version)
+            assertEquals(6, db.openHelper.readableDatabase.version)
             assertEquals(201, db.vodStreamDao().count())
             assertEquals(40, db.seriesStreamDao().count())
             assertEquals(30, db.liveStreamDao().count())
@@ -243,7 +238,7 @@ class WatchProgressMigrationTest {
     }
 
     @Test
-    fun `a v4 file reaches v5 without any destructive fallback`() {
+    fun `a v4 file reaches the current version without any destructive fallback`() {
         // Opening with no fallbackToDestructiveMigration() and only the real migrations is the
         // whole claim: a missing step would throw IllegalStateException instead of wiping.
         buildV4Database()

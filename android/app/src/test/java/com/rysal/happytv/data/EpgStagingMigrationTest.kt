@@ -174,8 +174,8 @@ class EpgStagingMigrationTest {
         buildV3Database()
 
         val db = Room.databaseBuilder(context, HappyTvDatabase::class.java, dbFile.name)
-            // A v3 file opens with the steps from v3 on (3 -> 4 is under test, 4 -> 5 follows it).
-            .addMigrations(HappyTvDatabase.MIGRATION_3_4, HappyTvDatabase.MIGRATION_4_5)
+            // A v3 file opens with the steps from v3 on (3 -> 4 is under test, the later steps follow it).
+            .addMigrations(*HappyTvDatabase.ALL_MIGRATIONS)
             .build()
 
         try {
@@ -198,10 +198,7 @@ class EpgStagingMigrationTest {
         buildV2Database()
 
         val db = Room.databaseBuilder(context, HappyTvDatabase::class.java, dbFile.name)
-            .addMigrations(
-                HappyTvDatabase.MIGRATION_1_2, HappyTvDatabase.MIGRATION_2_3, HappyTvDatabase.MIGRATION_3_4,
-                HappyTvDatabase.MIGRATION_4_5,
-            )
+            .addMigrations(*HappyTvDatabase.ALL_MIGRATIONS)
             .build()
 
         try {
@@ -225,10 +222,7 @@ class EpgStagingMigrationTest {
         buildV2Database()
 
         val db = Room.databaseBuilder(context, HappyTvDatabase::class.java, dbFile.name)
-            .addMigrations(
-                HappyTvDatabase.MIGRATION_1_2, HappyTvDatabase.MIGRATION_2_3, HappyTvDatabase.MIGRATION_3_4,
-                HappyTvDatabase.MIGRATION_4_5,
-            )
+            .addMigrations(*HappyTvDatabase.ALL_MIGRATIONS)
             .build()
 
         try {

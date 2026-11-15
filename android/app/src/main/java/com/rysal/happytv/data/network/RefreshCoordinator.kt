@@ -92,6 +92,8 @@ class RefreshCoordinator(
      */
     private val bulk: CoroutineDispatcher = io,
     private val clockUtcMillis: () -> Long = System::currentTimeMillis,
+    /** Extra clean-up on sign-out (#237: the guide download's old on-disk HTTP cache). */
+    private val onSignOut: suspend () -> Unit = {},
     /**
      * #19: runs once after each successful sign-in (production: imports a
      * restored household backup). Failures are logged by type and never fail
@@ -212,7 +214,7 @@ class RefreshCoordinator(
         )
         // 3) Cache user_info (allowed output formats, exp date…) for fast
         //    hydration before the first refresh of the next launch.
-        settings.setUserInfo(info?.let { json.encodeToString(it).toByteArray(Charsets.UTF_8) })
+        settings.setUserInfo(info?.let { json.encodeToString(it.forCache()).toByteArray(Charsets.UTF_8) })
 
         sessionRepository = repository
         // Publish the new session (signed-in + the persisted stamp) before the
@@ -280,6 +282,7 @@ class RefreshCoordinator(
         credentials.wipe()
         database.loginProfileDao().clear()
         settings.setUserInfo(null)
+        withContext(io) { runCatching { onSignOut() } }
         sessionRepository = null
         // The wipe is what makes the header say "Not signed in" again —
         // publish it like every other session transition (F-45).

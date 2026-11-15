@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.performKeyInput
@@ -31,12 +31,7 @@ class UrlFormatsDialogFocusTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private fun button(label: String): SemanticsMatcher {
-        val contains = hasAnyDescendant(hasText(label))
-        return SemanticsMatcher("innermost node containing '$label'") { node ->
-            contains.matches(node) && node.children.none { contains.matches(it) }
-        }
-    }
+    private fun button(label: String): SemanticsMatcher = hasClickAction() and hasText(label)
 
     private fun setScreenWithFormatsOpen() {
         compose.setContent {
@@ -57,7 +52,6 @@ class UrlFormatsDialogFocusTest {
                         onSubmit = {},
                         onRetry = {},
                         onChangeServer = {},
-                        onM3uPressed = {},
                         onOpenUrlFormats = {},
                         onCloseUrlFormats = {},
                         onPickUrlFormat = {},

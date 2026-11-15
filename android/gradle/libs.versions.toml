@@ -26,11 +26,6 @@ activityCompose = "1.9.0"
 # fixes all call sites, and the shim hunk cannot compile against 2.7
 # (its lifecycle-2.8 LocalLifecycleOwner symbol is gone) — drop it on merge.
 lifecycle = "2.7.0"
-# Compose for TV (Material3 TV) — Surface, Card, Button, Text + the TV focus ring
-# plumbing that the dashboard, status pill, header buttons and second-row cards
-# all depend on. 1.0.0 stable is built against Compose 1.6.8, which the BOM
-# above (2024.05.00 -> ui 1.6.7) satisfies via normal conflict resolution.
-tv = "1.0.0"
 # Material Icons Extended — the dashboard tile, status pill and second-row card
 # all draw from Material Symbols (LiveTv, Movie, Tv, Search, Refresh, Schedule,
 # Info, Tune, ViewTimeline, SmartDisplay, ErrorOutline, Check).
@@ -57,7 +52,6 @@ coil = "2.6.0"
 work = "2.9.1"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
-espresso = "3.6.1"
 robolectric = "4.12.2"
 # Compose Navigation — the browse lanes' NavHost (live_tv / categories/{type} /
 # streams/{type}/{categoryId} / details/{type}/{streamId}).
@@ -86,12 +80,7 @@ compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4
 # it lands in the merged manifest Robolectric reads for unit tests.
 compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
-# Compose for TV (Material3 TV) — Carousel, Card, Surface, Button, IconButton
-# and the focused-scale / glow / ring modifiers every TV surface depends on.
-tv-material = { group = "androidx.tv", name = "tv-material", version.ref = "tv" }
 # Material Icons Extended (Material Symbols). The dashboard tile icons,
 # status pill icons and second-row card icons all draw from this set.
 material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
@@ -107,7 +96,6 @@ media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls
 # OkHttp-backed data source (#21): lets a network interceptor veto each redirect hop.
 media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 
 # Coil — Compose image loading for poster art on the Movies / Shows rails.
 # `coil-compose` brings in `AsyncImage` + `ImageRequest`; HTTPS (TMDB) loads
@@ -152,8 +140,8 @@ kxml2 = { group = "net.sf.kxml", name = "kxml2", version = "2.3.0" }
 work-testing = { group = "androidx.work", name = "work-testing", version.ref = "work" }
 # Canned-JSON tests for XtreamApi/DTOs (MockWebServer, same OkHttp line).
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+okhttp-tls = { group = "com.squareup.okhttp3", name = "okhttp-tls", version.ref = "okhttp" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
-androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 [plugins]

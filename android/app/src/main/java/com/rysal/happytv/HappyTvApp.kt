@@ -8,7 +8,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.rysal.happytv.crash.CrashRecorder
+import com.rysal.happytv.crash.DebugForcedCrash
 import com.rysal.happytv.data.Graph
+import com.rysal.happytv.data.guide.HttpXmlTvFetcher
 import com.rysal.happytv.ui.login.AdbLoginInjection
 import java.math.BigInteger
 import java.security.MessageDigest
@@ -49,6 +52,10 @@ class HappyTvApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // #259: local crash recorder, installed first so a crash during startup is recorded too.
+        // No network, nothing leaves the device. Chains to the previous handler.
+        val crashRecorder = runCatching { CrashRecorder.create(this).also { it.install() } }.getOrNull()
+
         // First and only wiring step for v1: everything on Graph then resolves
         // lazily on first access (no startup cost for code paths not taken).
         Graph.init(this)
@@ -64,11 +71,24 @@ class HappyTvApp : Application() {
         // No-op on release builds (AdbLoginInjection.enabled gates it), so
         // the production broadcast surface is unchanged.
         AdbLoginInjection.register(this)
+        DebugForcedCrash.register(this)
+
+        // #259: add log lines to last crash's report and record abnormal exits, off the main
+        // thread. The sign-in is read first so the redactor knows the real username, password and host.
+        Graph.appScope.launch(Dispatchers.IO) {
+            runCatching { Graph.securedCredentials.current() }
+            crashRecorder?.processAtLaunch()
+        }
 
         // Foreground/background hooks (process-wide, with the 700ms stop-delay
         // semantics ProcessLifecycleOwner defines). v1 only logs; work that must
         // pause/resume on background registers against this same observer later.
         ProcessLifecycleOwner.get().lifecycle.addObserver(AppLifecycleObserver)
+
+        // #237: older builds cached the guide download (URL with the password) on disk.
+        Graph.appScope.launch(Dispatchers.IO) {
+            runCatching { HttpXmlTvFetcher.deleteLegacyHttpCache(this@HappyTvApp) }
+        }
 
         // #18: a derived XMLTV URL (with the password) used to be persisted in
         // plain settings. Replace it with the auto marker (or move a typed link
@@ -76,6 +96,13 @@ class HappyTvApp : Application() {
         Graph.appScope.launch {
             runCatching { Graph.settings.migrateLegacyEpgUrl(Graph.securedCredentials.current()) }
                 .onFailure { Log.w(TAG, "XMLTV link migration failed: ${it::class.java.simpleName}") }
+        }
+
+        // #212: older builds cached user_info with the username and password
+        // in plain settings. Rewrite it to the slim shape, off the main thread.
+        Graph.appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { Graph.settings.scrubCachedUserInfo() }
+                .onFailure { Log.w(TAG, "user_info scrub failed: ${it::class.java.simpleName}") }
         }
 
         // Guide background refresh: enqueue the periodic RefreshGuideWorker

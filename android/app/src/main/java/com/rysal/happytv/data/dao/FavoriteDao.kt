@@ -27,6 +27,42 @@ abstract class FavoriteDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     abstract suspend fun insertAll(rows: List<Favorite>)
 
+    /** #221: one catalog's favorites in the user's order, top first (ties newest first). */
+    @Query("SELECT * FROM favorites WHERE streamType = :streamType ORDER BY position ASC, addedAt DESC, streamId ASC")
+    abstract fun observeOrdered(streamType: StreamType): Flow<List<Favorite>>
+
+    @Query("SELECT * FROM favorites WHERE streamType = :streamType ORDER BY position ASC, addedAt DESC, streamId ASC")
+    abstract suspend fun getOrdered(streamType: StreamType): List<Favorite>
+
+    @Query("SELECT COALESCE(MAX(position), 0) + 1 FROM favorites WHERE streamType = :streamType")
+    abstract suspend fun nextPosition(streamType: StreamType): Int
+
+    @Query("UPDATE favorites SET position = :position WHERE streamId = :streamId AND streamType = :streamType")
+    abstract suspend fun setPosition(streamId: String, streamType: StreamType, position: Int)
+
+    /**
+     * #221: puts [shownIds], the favorites a screen shows, in the order given. They keep the
+     * places they already hold in the list (a favorite whose channel is hidden stays where it
+     * was), and only rows whose position changes are written, in one small transaction.
+     * Positions are renumbered 1..N, so they stay dense.
+     */
+    @Transaction
+    open suspend fun reorder(streamType: StreamType, shownIds: List<String>) {
+        val current = getOrdered(streamType)
+        val currentIds = current.mapTo(HashSet()) { it.streamId }
+        val wanted = shownIds.filter { it in currentIds }
+        val shown = wanted.toHashSet()
+        val slots = current.indices.filter { current[it].streamId in shown }
+        // A stale list (a favorite was removed meanwhile): leave the order alone.
+        if (wanted.size != slots.size) return
+        val result = current.map { it.streamId }.toMutableList()
+        slots.forEachIndexed { i, slot -> result[slot] = wanted[i] }
+        val byId = current.associateBy { it.streamId }
+        result.forEachIndexed { i, id ->
+            if (byId.getValue(id).position != i + 1) setPosition(id, streamType, i + 1)
+        }
+    }
+
     /** One catalog's favorites, most recently added first (the "Favorites" tab source). */
     @Query("SELECT * FROM favorites WHERE streamType = :streamType ORDER BY addedAt DESC")
     abstract fun observeForType(streamType: StreamType): Flow<List<Favorite>>
@@ -55,7 +91,14 @@ abstract class FavoriteDao {
         if (isFavorite(streamId, streamType)) {
             remove(streamId, streamType)
         } else {
-            insert(Favorite(streamId = streamId, streamType = streamType, addedAt = Instant.now()))
+            insert(
+                Favorite(
+                    streamId = streamId,
+                    streamType = streamType,
+                    addedAt = Instant.now(),
+                    position = nextPosition(streamType),
+                ),
+            )
         }
     }
 

@@ -48,7 +48,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -106,6 +111,8 @@ class BrowseViewModel(
     private val saveLastCategory: suspend (String) -> Unit = {},
     /** Persists the Guide | List choice, which the Live TV tile reopens (spec #7 section 3.6). */
     private val saveView: suspend (LiveTvView) -> Unit = {},
+    /** Where a placed favorite is written (#221); tests pass their own. */
+    private val writeDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     // #10: these are shared with replay = 1 and *no seed value*, so the first
@@ -311,15 +318,19 @@ class BrowseViewModel(
                     // Straight from the DAO, not the seeded `favoriteIds` StateFlow:
                     // its `emptySet()` seed would flash "No favorites yet" before
                     // the first real answer on a category-first entry.
-                    favoriteDao.observeForType(StreamType.LIVE)
-                        .map { rows -> rows.mapTo(HashSet()) { it.streamId } }
+                    favoriteDao.observeOrdered(StreamType.LIVE)
+                        .map { rows -> rows.map { it.streamId } }
                         .flatMapLatest { ids ->
-                        if (ids.isEmpty()) flow { emit(emptyList<LiveStream>()) }
-                        // No ordering contract here: `favoriteIds` is a Set, so
-                        // it carries no order to preserve, and the pane keeps
-                        // `num` order for this selection. The ids are only a
-                        // membership filter for the IN-clause.
-                        else liveStreamDao.observeByIds(ids.toList())
+                        if (ids.isEmpty()) {
+                            flow { emit(emptyList<LiveStream>()) }
+                        } else {
+                            // #221: the user's own order. The IN-clause drops it (rowid
+                            // order), so each id's place in `ids` puts it back, as for the
+                            // recents below.
+                            val order = ids.withIndex().associate { (i, id) -> id to i }
+                            liveStreamDao.observeByIds(ids)
+                                .map { streams -> streams.sortedBy { order[it.id] ?: Int.MAX_VALUE } }
+                        }
                     }
                 LiveCategorySelection.RecentlyWatched ->
                     recentIds.flatMapLatest { ids ->
@@ -351,6 +362,13 @@ class BrowseViewModel(
                 logFirstRows(rows)
             }
         }
+
+    /** #221: reorder mode, or null. The working order lives here; only a placed channel is written. */
+    private val _reorder = MutableStateFlow<ReorderState?>(null)
+
+    /** Placed favorites are written here, one small write each, off the main thread and even if the screen is left at once. */
+    private val writeScope = CoroutineScope(SupervisorJob() + writeDispatcher)
+    private val writeMutex = Mutex()
 
     /**
      * Everything but the now lines: rows draw as soon as the channel query
@@ -429,9 +447,8 @@ class BrowseViewModel(
         // [channelsForSelection], because the IN-clause query drops it).
         // Sorting every selection by `num` here would silently clobber the
         // recents order, so the channel-number sort only runs for the two
-        // selections that actually mean it. Favorites has no user-facing
-        // order contract (its ids are a Set) and stays in channel-number
-        // order, matching what the pane showed before.
+        // selections that actually mean it. Favorites arrives in the user's own
+        // order (#221), established in [channelsForSelection].
         val visibleChannels = channels
             .filter { showHidden || it.id !in hiddenIds }
             .let { ordered ->
@@ -560,7 +577,7 @@ class BrowseViewModel(
         }
     }
 
-    val ui: StateFlow<LiveTvUiState> = combine(baseUi, nowSnapshot, xmltvMode) { base, snapshot, xmltv ->
+    val ui: StateFlow<LiveTvUiState> = combine(baseUi, nowSnapshot, xmltvMode, _reorder) { base, snapshot, xmltv, reorder ->
         if (base.isLoading) return@combine base
         val usable = snapshot.xmltv == xmltv
         var allResolved = true
@@ -583,7 +600,14 @@ class BrowseViewModel(
                 }",
             )
         }
-        base.copy(channels = rows, nowResolved = allResolved)
+        if (base.selectedSelection != LiveCategorySelection.Favorites) {
+            return@combine base.copy(channels = rows, nowResolved = allResolved)
+        }
+        // #221: Favorites shows its own position (1 to N), not the provider's number, and in
+        // reorder mode follows the working order. Cheap: only the rows of the favorites.
+        val ordered = if (reorder != null) rows.inOrder(reorder.order) else rows
+        val numbered = ordered.mapIndexed { i, row -> row.copy(position = i + 1) }
+        base.copy(channels = numbered, nowResolved = allResolved, reorder = reorder?.toUi(numbered))
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, LiveTvUiState(isLoading = true))
 
     /**
@@ -600,6 +624,7 @@ class BrowseViewModel(
             if (needed > channelWindow.value) channelWindow.value = needed
         } else {
             windowFloor = needed
+            _reorder.value = null // #221: the mode belongs to the Favorites list
             HtvPerf.start(HtvPerf.LIVETV_CATEGORY_ROWS)
         }
         _selected.value = selection
@@ -681,6 +706,90 @@ class BrowseViewModel(
 
     fun setHideEmptyCategories(value: Boolean) {
         _hideEmptyCategories.value = value
+    }
+
+    // ------------------------------------------------------------ reorder (#221)
+
+    /** The long-press menu's "Reorder channels": enters the mode with the lineup as shown. Favorites only. */
+    fun startReorder() {
+        _channelMenu.value = null
+        if (_selected.value != LiveCategorySelection.Favorites) return
+        val ids = ui.value.channels.map { it.stream.id }
+        if (ids.isEmpty()) return
+        _reorder.value = ReorderState(order = ids)
+    }
+
+    /** OK on a channel in the mode: select it, or, when it is the selected one, place it (each place saves). */
+    fun reorderOk(streamId: String) {
+        val state = _reorder.value ?: return
+        when (state.selectedId) {
+            null -> {
+                val index = state.order.indexOf(streamId)
+                if (index >= 0) _reorder.value = state.copy(selectedId = streamId, startIndex = index, notice = null)
+            }
+            streamId -> {
+                val position = state.order.indexOf(streamId) + 1
+                if (state.order.indexOf(streamId) != state.startIndex) persistOrder(state.order)
+                _reorder.value = state.copy(
+                    selectedId = null,
+                    startIndex = -1,
+                    notice = ReorderNotice(ReorderNotice.Kind.PLACED, streamId, position),
+                )
+            }
+            else -> Unit
+        }
+    }
+
+    /** Up or Down with a channel selected: [places] up (negative) or down; the ends stop. */
+    fun reorderMove(places: Int) {
+        val state = _reorder.value ?: return
+        val id = state.selectedId ?: return
+        val moved = state.order.movedTo(id, state.order.indexOf(id) + places)
+        if (moved !== state.order) _reorder.value = state.copy(order = moved)
+    }
+
+    /** Left / Rewind (to the top) or Right / Fast-forward (to the bottom) with a channel selected; it stays selected. */
+    fun reorderJump(toTop: Boolean) {
+        val state = _reorder.value ?: return
+        val id = state.selectedId ?: return
+        val moved = state.order.movedTo(id, if (toTop) 0 else state.order.lastIndex)
+        if (moved !== state.order) _reorder.value = state.copy(order = moved)
+    }
+
+    /**
+     * Back, or Home and screen-off, in the mode: a selected channel goes back where it was (the mode
+     * stays); with nothing selected the mode ends. Returns false when there is no mode to act on.
+     */
+    fun reorderBack(): Boolean {
+        val state = _reorder.value ?: return false
+        val id = state.selectedId
+        if (id == null) {
+            _reorder.value = null
+            return true
+        }
+        val moved = state.order.indexOf(id) != state.startIndex
+        val restored = if (moved) state.order.movedTo(id, state.startIndex) else state.order
+        _reorder.value = state.copy(
+            order = restored,
+            selectedId = null,
+            startIndex = -1,
+            notice = if (moved) ReorderNotice(ReorderNotice.Kind.RESTORED, id, state.startIndex + 1) else null,
+        )
+        return true
+    }
+
+    /** Home or screen-off: acts like Back on a selected channel, and leaves the mode itself running. */
+    fun reorderRelease() {
+        if (_reorder.value?.selectedId != null) reorderBack()
+    }
+
+    private fun persistOrder(order: List<String>) {
+        writeScope.launch {
+            writeMutex.withLock {
+                runCatching { favoriteDao.reorder(StreamType.LIVE, order) }
+                    .onFailure { Log.w(LOG_TAG, "favorite order not saved: ${it::class.java.simpleName}") }
+            }
+        }
     }
 
     fun openChannelMenu(stream: LiveStream) {
@@ -924,6 +1033,8 @@ data class LiveChannelRow(
     val nowTitle: String? = null,
     /** "until 9:00", never null when [nowTitle] is set — it never truncates. */
     val nowUntilLabel: String? = null,
+    /** #221: the row's place in Favorites (1 to N), shown instead of the provider's channel number. Null elsewhere. */
+    val position: Int? = null,
 )
 
 /**
@@ -971,6 +1082,8 @@ data class LiveTvUiState(
      * "still asking". Drives the `livetv.category.epg` timing.
      */
     val nowResolved: Boolean = false,
+    /** #221: set while Favorites is being reordered. */
+    val reorder: ReorderUi? = null,
 )
 
 /**

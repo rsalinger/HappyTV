@@ -71,8 +71,8 @@ class PlayerActivity : ComponentActivity() {
 
         setContent {
             HappyTvTheme(alwaysDark = true) {
-                val state by viewModel.state.collectAsStateWithLifecycle()
-                val ready = state as? PlayerUiState.Ready
+                // #239: only isBuffering, so the 1 s position tick recomposes nothing here.
+                val buffering by viewModel.isBuffering.collectAsStateWithLifecycle()
 
                 // F-54: the destroy path. Runs on BACK too (`isFinishing`
                 // short-circuits the onStop release), so this is the teardown
@@ -84,7 +84,7 @@ class PlayerActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize().background(PlayerColors.VideoBlack)) {
                     PlayerSurface(
                         player = host.exoPlayer,
-                        dimmed = ready?.content?.isBuffering == true,
+                        dimmed = buffering,
                         modifier = Modifier.fillMaxSize(),
                     )
                     PlayerScreen(
@@ -94,12 +94,19 @@ class PlayerActivity : ComponentActivity() {
                         // (consistent with Live TV's long-press Stop); without
                         // it the repeats re-toggled the leave dialog.
                         onLongBack = { finish() },
+                        // #220: catch-up of a live channel offers the recent channels row; a pick goes live.
+                        onPlayRecent = { streamId ->
+                            viewModel.recordWatched(streamId)
+                            host.play(PlayerLaunch.live(streamId = streamId))
+                        },
                     )
                 }
             }
         }
 
         host.attach()
+        // #223: a live channel started here counts as watched after 10 s of playing.
+        viewModel.recordWatchedAfterPlaying()
 
         // #84: the last episode ended, back to details.
         lifecycleScope.launch {
@@ -108,7 +115,7 @@ class PlayerActivity : ComponentActivity() {
 
         // Exit paths the activity owns: replay without an archive, no login.
         lifecycleScope.launch {
-            viewModel.state.collectLatest { state ->
+            viewModel.uiState.collectLatest { state ->
                 Log.i(TAG, "state observer: ${state::class.simpleName}")
                 when (state) {
                     is PlayerUiState.ReplayUnsupported -> {

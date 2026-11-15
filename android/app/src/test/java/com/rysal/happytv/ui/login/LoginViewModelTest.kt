@@ -476,16 +476,6 @@ class LoginViewModelTest {
     // ------------------------------------------------------------ status slot
 
     @Test
-    fun m3u_showsInfoLine_notAnError() = runTest(scheduler) {
-        val vm = viewModel()
-
-        vm.onM3uPressed()
-
-        assertEquals(LoginViewModel.M3U_INFO_LINE, vm.state.value.infoLine)
-        assertNull(vm.state.value.statusError)
-    }
-
-    @Test
     fun rememberMe_toggles() = runTest(scheduler) {
         val vm = viewModel()
         assertTrue(vm.state.value.rememberMe)

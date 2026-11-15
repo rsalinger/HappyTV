@@ -1,5 +1,6 @@
 package com.rysal.happytv.ui.player
 
+import com.rysal.happytv.data.network.InsecureRedirectException
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException

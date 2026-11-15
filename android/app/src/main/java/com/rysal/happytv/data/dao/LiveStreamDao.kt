@@ -8,6 +8,15 @@ import androidx.room.Transaction
 import com.rysal.happytv.data.entity.LiveStream
 import kotlinx.coroutines.flow.Flow
 
+/** #224: the channel-step sort key, a missing num last as Live TV shows it. */
+private const val STEP_KEY = "COALESCE(num, 2147483647)"
+
+/** #224: one category (or, with a null id, everything outside hidden categories) without hidden channels. */
+private const val STEP_SCOPE =
+    "((:categoryId IS NOT NULL AND categoryId = :categoryId) OR (:categoryId IS NULL AND categoryId NOT IN " +
+        "(SELECT id FROM categories WHERE type = 'LIVE' AND isHidden = 1))) AND " +
+        "id NOT IN (SELECT streamId FROM hidden_channels WHERE streamType = 'LIVE')"
+
 /** Live-channel catalog reads + refresh writes. */
 @Dao
 abstract class LiveStreamDao {
@@ -24,9 +33,10 @@ abstract class LiveStreamDao {
      * The Search overlay's channel index (design spec §"Screens: search").
      *
      * Three columns per row — Search matches on names, so it must not pull
-     * whole entities into memory on every keystroke.
+     * whole entities into memory on every keystroke. Unordered on purpose (#241): Search sorts only
+     * its matches, see `SearchOrder`.
      */
-    @Query("SELECT id, name, num FROM live_streams ORDER BY num, name COLLATE NOCASE")
+    @Query("SELECT id, name, num FROM live_streams")
     abstract fun observeSearchRows(): Flow<List<SearchChannelRow>>
 
     /** Logo URLs (`stream_icon`) for the few channel ids a search draws (#139). */
@@ -82,6 +92,40 @@ abstract class LiveStreamDao {
             "(COALESCE(num, -2147483648) = COALESCE(:num, -2147483648) AND name COLLATE NOCASE < :name COLLATE NOCASE))",
     )
     abstract suspend fun rowsBefore(categoryId: String, num: Int?, name: String): Int
+
+    /**
+     * #224 channel up/down: the neighbours of a channel in the order Live TV lists it (num, then name,
+     * a missing num last), skipping hidden channels. [categoryId] null = every channel outside hidden
+     * categories (All channels). [num] is the channel's own num, or Int.MAX_VALUE when it has none.
+     * One row each, so a 20k-channel category costs one indexed lookup, never the whole list.
+     */
+    @Query(
+        "SELECT * FROM live_streams WHERE " + STEP_SCOPE + " AND (" +
+            STEP_KEY + " > :num OR (" + STEP_KEY + " = :num AND name COLLATE NOCASE > :name COLLATE NOCASE)) " +
+            "ORDER BY " + STEP_KEY + ", name COLLATE NOCASE LIMIT 1",
+    )
+    abstract suspend fun channelAfter(categoryId: String?, num: Int, name: String): LiveStream?
+
+    @Query(
+        "SELECT * FROM live_streams WHERE " + STEP_SCOPE + " AND (" +
+            STEP_KEY + " < :num OR (" + STEP_KEY + " = :num AND name COLLATE NOCASE < :name COLLATE NOCASE)) " +
+            "ORDER BY " + STEP_KEY + " DESC, name COLLATE NOCASE DESC LIMIT 1",
+    )
+    abstract suspend fun channelBefore(categoryId: String?, num: Int, name: String): LiveStream?
+
+    /** The first channel of the list [channelAfter] walks: where channel down wraps to. */
+    @Query(
+        "SELECT * FROM live_streams WHERE " + STEP_SCOPE +
+            " ORDER BY " + STEP_KEY + ", name COLLATE NOCASE LIMIT 1",
+    )
+    abstract suspend fun firstChannel(categoryId: String?): LiveStream?
+
+    /** The last channel: where channel up wraps to. */
+    @Query(
+        "SELECT * FROM live_streams WHERE " + STEP_SCOPE +
+            " ORDER BY " + STEP_KEY + " DESC, name COLLATE NOCASE DESC LIMIT 1",
+    )
+    abstract suspend fun lastChannel(categoryId: String?): LiveStream?
 
     @Query("SELECT COUNT(*) FROM live_streams")
     abstract suspend fun count(): Int

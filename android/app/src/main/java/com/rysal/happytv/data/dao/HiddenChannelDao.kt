@@ -61,10 +61,6 @@ abstract class HiddenChannelDao {
     @Query("DELETE FROM hidden_channels WHERE streamId = :streamId AND streamType = :type")
     abstract suspend fun delete(streamId: String, type: StreamType)
 
-    /** Bulk reveal for one catalog ("Show hidden channels"). */
-    @Query("DELETE FROM hidden_channels WHERE streamType = :type")
-    abstract suspend fun revealAll(type: StreamType)
-
     @Query("DELETE FROM hidden_channels")
     abstract suspend fun clear()
 

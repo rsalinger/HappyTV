@@ -153,7 +153,7 @@ class CatalogViewModelTest {
         }
         return Room.databaseBuilder(context, HappyTvDatabase::class.java, file.absolutePath)
             .allowMainThreadQueries()
-            .addMigrations(HappyTvDatabase.MIGRATION_1_2)
+            .addMigrations(*HappyTvDatabase.ALL_MIGRATIONS)
             .build()
             .also { db = it }
     }
@@ -488,7 +488,7 @@ class CatalogViewModelTest {
         )
         advanceUntilIdle()
 
-        val detail = viewModel.detail.first { it != null }!!
+        val detail = viewModel.detail.first { it != null && !it.infoPending }!!
         assertFalse(detail.isSeries)
         assertEquals("no info block → no plot", null, detail.plot)
         assertTrue("no info block → no genres", detail.genres.isEmpty())
@@ -516,7 +516,7 @@ class CatalogViewModelTest {
 
         // The row is still visible — the page degrades to the list-row fields
         // (name + rating) and the "missing info" copy, never crashes.
-        val detail = viewModel.detail.first { it != null }!!
+        val detail = viewModel.detail.first { it != null && !it.infoPending }!!
         assertEquals("m1", detail.id)
         assertEquals("The Long Coast", detail.name)
         assertEquals(null, detail.plot)
@@ -1379,5 +1379,134 @@ class CatalogViewModelTest {
         val viewModel = newViewModel(database, streamId = "a", session = sessionOf(episodesApi(episodesJson)))
         advanceUntilIdle()
         assertEquals(EpisodesState.Idle, viewModel.episodes.value)
+    }
+
+    // ---- #240: details shows the cached row at once and starts no grid work ----
+
+    @Test
+    fun `a movie shows its cached row before get_vod_info returns, then fills in`() = runTest {
+        val database = openDb()
+        seedMovies(database)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val api = FakeXtreamApi().apply { vodInfoResponse = fixtureVodInfo() }
+        val viewModel = newViewModel(
+            database,
+            streamId = "m1",
+            session = {
+                gate.await()
+                XtreamRepository(host = "panel.example", port = 8080, useTls = false, username = "u", password = "p", api = api)
+            },
+        )
+        advanceUntilIdle()
+
+        // The provider has not answered (the call is parked): the row is already there.
+        val cached = viewModel.detail.first { it != null }!!
+        assertEquals("The Long Coast", cached.name)
+        assertTrue("the screen is told the metadata is still coming", cached.infoPending)
+        assertEquals(null, cached.plot)
+
+        gate.complete(Unit)
+        val full = viewModel.detail.first { it != null && !it.infoPending }!!
+        assertEquals("The Long Coast", full.name)
+        assertEquals("1999", full.year)
+        assertTrue(full.plot!!.startsWith("A computer hacker"))
+    }
+
+    @Test
+    fun `a failed get_vod_info leaves the cached row and releases the loading hold`() = runTest {
+        val database = openDb()
+        seedMovies(database)
+        val api = FakeXtreamApi().apply { vodInfoFailure = java.io.IOException("panel unreachable") }
+        val viewModel = newViewModel(
+            database,
+            streamId = "m1",
+            session = {
+                XtreamRepository(host = "panel.example", port = 8080, useTls = false, username = "u", password = "p", api = api)
+            },
+        )
+        advanceUntilIdle()
+
+        val settled = viewModel.detail.first { it != null && !it.infoPending }!!
+        assertEquals("The Long Coast", settled.name)
+        assertEquals("Rating 7.4/10", settled.ratingLabel)
+        assertEquals(null, settled.plot)
+    }
+
+    @Test
+    fun `an empty get_vod_info and a missing session leave the cached row in place`() = runTest {
+        val database = openDb()
+        seedMovies(database)
+        val empty = newViewModel(
+            database,
+            streamId = "m1",
+            session = sessionWith(VodInfoDto(movie_data = MovieDataDto(stream_id = "501"))),
+        )
+        val noSession = newViewModel(database, streamId = "m2")
+        advanceUntilIdle()
+
+        assertEquals("The Long Coast", empty.detail.first { it != null && !it.infoPending }!!.name)
+        assertEquals("Copper Sky", noSession.detail.first { it != null && !it.infoPending }!!.name)
+    }
+
+    @Test
+    fun `the cached row keeps favorite and resume while get_vod_info is out`() = runTest {
+        val database = openDb()
+        seedMovies(database)
+        database.favoriteDao().toggle("m1", StreamType.VOD)
+        database.watchProgressDao().upsert(
+            WatchProgress(
+                streamType = StreamType.VOD, streamId = "m1", positionMillis = 600_000L, durationMillis = 7_200_000L,
+                updatedUtcMillis = 1L,
+            ),
+        )
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val viewModel = newViewModel(database, streamId = "m1", session = { gate.await(); null })
+        advanceUntilIdle()
+
+        val cached = viewModel.detail.first { it != null && it.isFavorite && it.resume != null }!!
+        assertTrue(cached.infoPending)
+        assertEquals(600_000L, cached.resume!!.positionMillis)
+        gate.complete(Unit)
+    }
+
+    @Test
+    fun `opening details does not start the grid queries`() = runTest {
+        val database = openDb()
+        seedMovies(database)
+        val details = newViewModel(database, streamId = "m1")
+        advanceUntilIdle()
+        details.detail.first { it != null }
+        drainRoomExecutors()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        // Nothing collects the grid, so nothing scans the table: the seed value is untouched.
+        assertEquals(CatalogGrid(null, emptyList(), loaded = false), details.grid.value)
+        assertTrue(details.categoryCounts.value.isEmpty())
+        assertEquals(0, details.totalItems.value)
+        assertEquals(0, details.continueCount.value)
+
+        // The grid screen still starts at once.
+        val grid = newViewModel(database, categoryId = "drama")
+        advanceUntilIdle()
+        assertTrue(grid.grid.first { it.loaded && it.items.isNotEmpty() }.items.isNotEmpty())
+    }
+
+    @Test
+    fun `a remembered category opens without first running the whole-catalog window`() = runTest {
+        val database = openDb()
+        seedMovies(database)
+        val remembered = kotlinx.coroutines.CompletableDeferred<String?>()
+        val viewModel = newViewModel(database, lastCategory = kotlinx.coroutines.flow.flow { emit(remembered.await()) })
+        val seen = mutableListOf<String?>()
+        val collecting = launch(Dispatchers.Unconfined) { viewModel.grid.collect { seen += it.categoryId } }
+        advanceUntilIdle()
+        drainRoomExecutors()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("no window is queried while the category is unknown", seen.all { it == null })
+
+        remembered.complete("comedy")
+        viewModel.grid.first { it.categoryId == "comedy" && it.loaded }
+        assertFalse("the All window never ran", seen.contains(CatalogViewModel.ALL_CATEGORY_ID))
+        collecting.cancel()
     }
 }

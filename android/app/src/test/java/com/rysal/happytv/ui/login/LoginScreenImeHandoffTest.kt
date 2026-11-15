@@ -77,7 +77,6 @@ class LoginScreenImeHandoffTest {
                         onSubmit = { submitted++ },
                         onRetry = {},
                         onChangeServer = {},
-                        onM3uPressed = {},
                         onOpenUrlFormats = {},
                         onCloseUrlFormats = {},
                         onPickUrlFormat = {},
@@ -100,7 +99,7 @@ class LoginScreenImeHandoffTest {
     private fun imeNextFrom(from: LoginFocusTarget, fromText: String) {
         setScreen(from)
         compose.waitForIdle()
-        compose.onNode(isFocused() and hasAnyDescendant(hasText(fromText)))
+        compose.onNode(isFocused() and (hasText(fromText) or hasAnyDescendant(hasText(fromText))))
             .performKeyInput { pressKey(Key.DirectionCenter) }
         // TvTextField waits out a 60 ms IME settle before the editor takes
         // focus, so the editable field shows up a beat after the OK press.
@@ -120,7 +119,7 @@ class LoginScreenImeHandoffTest {
     }
 
     private fun assertFocusOn(text: String) {
-        compose.onNode(isFocused() and hasAnyDescendant(hasText(text))).assertExists()
+        compose.onNode(isFocused() and (hasText(text) or hasAnyDescendant(hasText(text)))).assertExists()
     }
 
     // ------------------------------------------------------------------ tests

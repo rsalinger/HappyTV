@@ -33,8 +33,8 @@ import org.robolectric.annotation.Config
  * straight into Room, so a connection dropped at 90% (or a panel serving
  * an HTML error page as 200) wiped every row. The staged pipeline only
  * touches `epg_programs` after a complete file is on disk, and the replace
- * itself is one Room transaction (`EpgProgramDao.replaceAllStreamed`), so
- * both failure shapes roll back to the previous guide.
+ * itself runs only after the whole file parsed (staged rows, then promotion),
+ * so both failure shapes leave the previous guide.
  *
  * Robolectric + in-memory Room + MockWebServer as the panel.
  */
@@ -152,7 +152,7 @@ class GuideXmlTvLastGoodTest {
     @Test
     fun `malformed xml rolls the whole replace back and keeps the last-good guide`() = runBlocking {
         seedLastGood()
-        // 600 valid rows — past EpgProgramDao.INSERT_BATCH_SIZE (500), so a
+        // 600 valid rows — enough that a
         // batch is already flushed to Room — then a stray close tag makes the
         // parser throw mid-transaction. Only a real rollback keeps "Kept".
         val body = buildString {

@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
  * according to the `epgPastDaysToKeep` setting so the table doesn't grow
  * unbounded.
  *
- * **F-65 — why the replace is staged, not inline.** `replaceAllStreamed`
+ * **F-65 — why the replace is staged, not inline.** The old replace
  * used to `deleteAll()` and then insert all 369,366 rows inside one
  * `@Transaction`. On the Chromecast HD that is ~120 MB of WAL written
  * while the database's single write lock is held for *minutes*: every
@@ -252,28 +252,6 @@ abstract class EpgProgramDao {
         insertAll(programs)
     }
 
-    /**
-     * The in-memory replace, kept for tests and small writes.
-     *
-     * **Not for the XMLTV import** — that path is [stageAllStreamed] +
-     * [promoteStaged], which is what keeps the app responsive on a slow
-     * disk (F-65). Holding the whole document in memory is still fine
-     * for the handful of rows the unit tests build.
-     */
-    @Transaction
-    open suspend fun replaceAllStreamed(programs: Sequence<EpgProgram>) {
-        deleteAll()
-        val batch = ArrayList<EpgProgram>(INSERT_BATCH_SIZE)
-        for (program in programs) {
-            batch.add(program)
-            if (batch.size >= INSERT_BATCH_SIZE) {
-                insertAll(batch)
-                batch.clear()
-            }
-        }
-        if (batch.isNotEmpty()) insertAll(batch)
-    }
-
     // ------------------------------------------------------- F-65: staging
 
     @Insert
@@ -460,9 +438,6 @@ abstract class EpgProgramDao {
          * builds (minSdk 23); the windowed reads carry two more binds, so stay well under.
          */
         const val KEYS_PER_QUERY = 400
-
-        /** Rows per `insertAll` call inside [replaceAllStreamed]. */
-        const val INSERT_BATCH_SIZE = 500
 
         /**
          * Rows per staging transaction. Measured on a desktop with 369k

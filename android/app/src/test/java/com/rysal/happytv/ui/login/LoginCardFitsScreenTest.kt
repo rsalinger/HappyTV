@@ -37,7 +37,7 @@ class LoginCardFitsScreenTest {
                         ),
                         onServerUrlChange = {}, onUsernameChange = {}, onPasswordChange = {},
                         onRememberMeToggle = {}, onSubmit = {}, onRetry = {}, onChangeServer = {},
-                        onM3uPressed = {}, onOpenUrlFormats = {}, onCloseUrlFormats = {},
+                        onOpenUrlFormats = {}, onCloseUrlFormats = {},
                         onPickUrlFormat = {}, onPickSavedServer = {}, onSheetUseHttps = {},
                         onSheetContinueAnyway = {}, onSheetCancel = {}, onFocusHandled = {},
                     )

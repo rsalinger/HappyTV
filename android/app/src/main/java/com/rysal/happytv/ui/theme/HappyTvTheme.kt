@@ -252,8 +252,7 @@ abstract class HappyTvColorSet {
 
     // ── Fixed in both modes (drawn over artwork, or a dark scrim over a screen) ──
 
-    /** Poster title strip: (10, 8, 7, 0) → (10, 8, 7, 0.92) at the 50% stop. */
-    val PosterStripStart = Color(0x000A0807)
+    /** Poster title strip: transparent → (10, 8, 7, 0.92) at the 50% stop. */
     val PosterStripEnd = Color(0xEB0A0807)
     /** Poster badges: rgba(19, 16, 14, 0.88). */
     val PosterBadge = Color(0xE113100E)
@@ -316,6 +315,12 @@ class HappyTvDesign internal constructor(
     /** Handoff px -> sp (handoff rule: text px / 2 == sp at density 2). */
     fun sp(value: Float): TextUnit = (value * scale / density).sp
     fun sp(value: Int): TextUnit = sp(value.toFloat())
+
+    /** Window pixels -> artboard px (the inverse of [px] on the artboard's own pixel grid). */
+    fun artboardPx(windowPx: Float): Float = windowPx / scale
+
+    /** Artboard px -> window pixels. */
+    fun windowPx(artboardPx: Float): Float = artboardPx * scale
 }
 
 /** Fallback for previews/tests outside [HappyTvTheme]: a 1080p, density-2 TV. */
@@ -346,9 +351,6 @@ const val COMPACT_MIN_TEXT_PX = 24
 /** The handoff's type table, sized for this window. */
 @Immutable
 class HappyTvTypography(private val d: HappyTvDesign) {
-    /** Splash wordmark, 120/128 800 -3%. */
-    val splashWordmark: TextStyle = style(120, 128, FontWeight.W800, letterSpacingPercent = -3f)
-
     /** Display, 72/80 800 -2% — dashboard tile titles, movie/show titles. */
     val display: TextStyle = style(72, 80, FontWeight.W800, letterSpacingPercent = -2f)
 
@@ -537,16 +539,6 @@ private const val M3_BODY_MEDIUM_LINE_PX = 44
 @Composable
 fun HappyTvCanvas(content: @Composable () -> Unit) {
     HappyTvArtboard(background = HappyTvColors.Ground, content = content)
-}
-
-/**
- * The same artboard as [HappyTvCanvas] with **no field behind it** — for the
- * modal overlays (Search) whose window is translucent, so whatever screen
- * opened them stays visible underneath the overlay's own scrim.
- */
-@Composable
-fun HappyTvOverlayCanvas(content: @Composable () -> Unit) {
-    HappyTvArtboard(background = null, content = content)
 }
 
 @Composable

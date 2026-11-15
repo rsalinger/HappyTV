@@ -61,6 +61,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
+import com.rysal.happytv.ui.browse.htvClickable
+import com.rysal.happytv.ui.browse.htvClickableSurface
+import com.rysal.happytv.ui.focus.htvFocusTarget
+import com.rysal.happytv.ui.focus.isOk
 import com.rysal.happytv.ui.theme.HappyTvColors
 import com.rysal.happytv.ui.theme.HappyTvIcons
 import com.rysal.happytv.ui.theme.LocalHappyTvDesign
@@ -203,25 +207,14 @@ fun TvTextLink(
 ) {
     val d = LocalHappyTvDesign.current
     val typography = LocalHappyTvTypography.current
-    val radius = d.px(TEXT_LINK_HEIGHT_PX / 2)
-    var focused by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .height(d.px(TEXT_LINK_HEIGHT_PX))
-            // Ring first — see [happyTvFocusRing]: a clip above it would erase
-            // the ring and the glow (F-33).
-            .happyTvFocusRing(focused = focused, radius = radius)
-            .clip(RoundedCornerShape(radius))
-            .background(Color.Transparent)
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
+            // Before `htvClickable`: a FocusRequester only finds targets after it.
+            .htvFocusTarget(focusRequester)
+            // Ring, clip, OK handling and focus all come from htvClickable (#243).
+            .htvClickable(radiusPx = TEXT_LINK_HEIGHT_PX / 2, onClick = onClick)
             .semantics { role = Role.Button; contentDescription = label }
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyUp && event.key == Key.DirectionCenter) {
-                    onClick(); true
-                } else false
-            }
             .padding(horizontal = d.px(TEXT_LINK_PADDING_PX)),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -361,9 +354,7 @@ fun TvTextField(
                 } else false
             }
             .onPreviewKeyEvent { event ->
-                val isOk = event.key == Key.DirectionCenter ||
-                    event.key == Key.Enter ||
-                    event.key == Key.NumPadEnter
+                val isOk = event.isOk()
                 when {
                     !editing && event.type == KeyEventType.KeyUp && isOk -> {
                         startEditing(); true
@@ -440,28 +431,16 @@ fun TvCheckboxRow(
 ) {
     val d = LocalHappyTvDesign.current
     val typography = LocalHappyTvTypography.current
-    val radius = d.px(CHECKBOX_ROW_HEIGHT_PX / 2)
-    var focused by remember { mutableStateOf(false) }
     val edgeStroke = d.px(CHECKBOX_EDGE_PX)
     Row(
         modifier = modifier
             .height(d.px(CHECKBOX_ROW_HEIGHT_PX))
-            // Ring first — a clip above it would erase the ring and the glow
-            // (F-33).
-            .happyTvFocusRing(focused = focused, radius = radius)
-            .clip(RoundedCornerShape(radius))
-            .background(Color.Transparent)
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
+            // Before `htvClickable`: a FocusRequester only finds targets after it.
+            .htvFocusTarget(focusRequester)
+            .htvClickable(radiusPx = CHECKBOX_ROW_HEIGHT_PX / 2, onClick = onToggle)
             .semantics {
                 role = Role.Checkbox
                 contentDescription = label
-            }
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyUp && event.key == Key.DirectionCenter) {
-                    onToggle(); true
-                } else false
             }
             .padding(
                 start = d.px(CHECKBOX_ROW_PADDING_START_PX),
@@ -507,7 +486,7 @@ fun TvCheckboxRow(
 
 /**
  * The status line — one slot at the bottom of the card holding help text, the
- * signing-in message, the M3U note or a red error with an icon. Errors
+ * signing-in message or a red error with an icon. Errors
  * *replace* the help text, so the card never changes height (design spec
  * "Sign in", status line).
  */
@@ -560,33 +539,22 @@ private fun TvButton(
     contentDescription: String?,
 ) {
     val d = LocalHappyTvDesign.current
-    val radius = d.px(BUTTON_HEIGHT_PX / 2)
-    var focused by remember { mutableStateOf(false) }
     val sized = if (widthPx != null) Modifier.size(d.px(widthPx), d.px(BUTTON_HEIGHT_PX)) else Modifier.height(d.px(BUTTON_HEIGHT_PX))
     Box(
         modifier = modifier
             .then(sized)
-            // Ring first — a clip above it would erase the ring and the glow
-            // (F-33) — and in the ring colour that contrasts this fill: Accent
-            // fill gets the near-white ring, everything else keeps Accent.
-            .happyTvFocusRing(
-                focused = focused,
-                radius = radius,
-                focusRingColor = HappyTvColors.focusRingOn(containerColor),
+            // Before `htvClickable*`: a FocusRequester only finds targets after it.
+            .htvFocusTarget(focusRequester)
+            // Fill, ring (near-white on an Accent fill, Accent otherwise), clip, OK
+            // handling and focus all come from htvClickableSurface (#243).
+            .htvClickableSurface(
+                radiusPx = BUTTON_HEIGHT_PX / 2,
+                background = containerColor,
+                onClick = onClick,
             )
-            .clip(RoundedCornerShape(radius))
-            .background(containerColor)
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
             .semantics {
                 role = Role.Button
                 if (contentDescription != null) this.contentDescription = contentDescription
-            }
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyUp && event.key == Key.DirectionCenter) {
-                    onClick(); true
-                } else false
             }
             .padding(horizontal = d.px(BUTTON_PADDING_PX)),
         contentAlignment = Alignment.Center,

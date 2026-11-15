@@ -59,19 +59,27 @@ abstract class SeriesStreamDao {
     @Query("SELECT EXISTS(SELECT 1 FROM series_streams WHERE lastModified IS NOT NULL)")
     abstract suspend fun hasModifiedStamps(): Boolean
 
-    /** Rows in the order given by [ids] — the Favorites poster grid. */
-    @Query("SELECT * FROM series_streams WHERE id IN (:ids)")
-    abstract fun observeByIds(ids: List<String>): Flow<List<SeriesStream>>
+    /**
+     * #232: the Favorites poster grid, in the user's order: `favorites.position` (1 = top, new ones
+     * last), ties (position 0 on older rows) newest `addedAt` first, then id. Favorites whose title
+     * is no longer in the catalog are skipped; the join cannot repeat a row (both keys are unique).
+     */
+    @Query(
+        "SELECT s.* FROM series_streams s JOIN favorites f ON f.streamId = s.id AND f.streamType = 'SERIES' " +
+            "ORDER BY f.position ASC, f.addedAt DESC, s.id ASC",
+    )
+    abstract fun observeFavorites(): Flow<List<SeriesStream>>
 
     @Query("SELECT * FROM series_streams WHERE name LIKE '%' || :query || '%' ORDER BY name COLLATE NOCASE")
     abstract fun search(query: String): Flow<List<SeriesStream>>
 
     /**
-     * The Search overlay's show index: [SERIES_YEAR_SQL] for the year line.
+     * The Search overlay's show index: [SERIES_YEAR_SQL] for the year line. Unordered on purpose (#241):
+     * Search sorts only its matches, see `SearchOrder`.
      */
     @Query(
-        "SELECT id, name, " + SERIES_YEAR_SQL + " AS year " +
-            "FROM series_streams ORDER BY num, name COLLATE NOCASE",
+        "SELECT id, name, " + SERIES_YEAR_SQL + " AS year, num " +
+            "FROM series_streams",
     )
     abstract fun observeSearchRows(): Flow<List<SearchPosterRow>>
 

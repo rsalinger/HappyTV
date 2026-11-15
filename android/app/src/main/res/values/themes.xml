@@ -14,7 +14,7 @@
 
     <!-- Search is a modal overlay (design spec §"Screens: search"): its window is
          translucent so the screen that opened it stays visible behind the
-         overlay's own 70% scrim. No window preview either — the flash of a
+         overlay's own opaque scrim. No window preview either — the flash of a
          Ground-coloured window would defeat the whole effect. -->
     <style name="Theme.HappyTv.Search" parent="Theme.HappyTv">
         <item name="android:windowIsTranslucent">true</item>

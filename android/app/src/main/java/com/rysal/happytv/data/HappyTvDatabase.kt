@@ -42,8 +42,9 @@ import com.rysal.happytv.data.entity.WatchProgress
  * (see [MIGRATION_1_2]); **v3 adds [EpgProgramStage]**, the XMLTV import's
  * staging table (see [MIGRATION_2_3] and F-65); **v4 indexes that staging table by channel**
  * (see [MIGRATION_3_4] and #43); **v5 adds [WatchProgress]** and indexes the movie and show
- * "added" stamps (see [MIGRATION_4_5] and #78). `exportSchema = true` writes
- * `5.json` on every KSP run, so later migrations have a golden file to diff
+ * "added" stamps (see [MIGRATION_4_5] and #78); **v6 adds a stored position to [Favorite]** (see [MIGRATION_5_6]
+ * and #221). `exportSchema = true` writes
+ * `6.json` on every KSP run, so later migrations have a golden file to diff
  * against.
  *
  * Threads: every suspend/Flow DAO call already hops off the caller thread; do
@@ -65,7 +66,7 @@ import com.rysal.happytv.data.entity.WatchProgress
         RecentChannel::class,
         WatchProgress::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -164,7 +165,7 @@ abstract class HappyTvDatabase : RoomDatabase() {
                 Room.inMemoryDatabaseBuilder(context, HappyTvDatabase::class.java)
             } else {
                 Room.databaseBuilder(context, HappyTvDatabase::class.java, NAME)
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(*ALL_MIGRATIONS)
             }
             return builder.build()
         }
@@ -220,5 +221,60 @@ abstract class HappyTvDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * v5 -> v6 (#221): a stored position for favorites, so the user can put them in order.
+         *
+         * One column, then each favorite is numbered 1..N within its stream type **in the order the
+         * favorites screens show today**, so the list looks the same after the update. Those screens
+         * read `WHERE id IN (...)` on the catalog table with no sort afterwards, and SQLite answers
+         * that through the text primary key, so today's order is the stream id as text (not the
+         * channel number and not the order added). Favorites whose stream is not in the catalog are
+         * not shown today; they go after the others, newest added first, the stream id breaking a
+         * tie. No row is dropped; the DDL is what Room writes to `app/schemas/.../6.json`.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `favorites` ADD COLUMN `position` INTEGER NOT NULL DEFAULT 0")
+                val rows = ArrayList<FavoriteSeedRow>()
+                db.query(
+                    "SELECT f.`streamId`, f.`streamType`, f.`addedAt`, CASE f.`streamType` " +
+                        "WHEN 'LIVE' THEN EXISTS(SELECT 1 FROM `live_streams` s WHERE s.`id` = f.`streamId`) " +
+                        "WHEN 'VOD' THEN EXISTS(SELECT 1 FROM `vod_streams` s WHERE s.`id` = f.`streamId`) " +
+                        "WHEN 'SERIES' THEN EXISTS(SELECT 1 FROM `series_streams` s WHERE s.`id` = f.`streamId`) " +
+                        "ELSE 0 END FROM `favorites` f",
+                ).use { c ->
+                    while (c.moveToNext()) rows += FavoriteSeedRow(c.getString(0), c.getString(1), c.getLong(2), c.getInt(3) != 0)
+                }
+                val order = Comparator<FavoriteSeedRow> { x, y ->
+                    when {
+                        x.inCatalog != y.inCatalog -> if (x.inCatalog) -1 else 1
+                        x.inCatalog -> x.streamId.compareTo(y.streamId)
+                        x.addedAt != y.addedAt -> y.addedAt.compareTo(x.addedAt)
+                        else -> x.streamId.compareTo(y.streamId)
+                    }
+                }
+                rows.groupBy { it.type }.values.forEach { group ->
+                    group.sortedWith(order).forEachIndexed { i, r ->
+                        db.execSQL(
+                            "UPDATE `favorites` SET `position` = ? WHERE `streamId` = ? AND `streamType` = ?",
+                            arrayOf<Any>(i + 1, r.streamId, r.type),
+                        )
+                    }
+                }
+            }
+        }
+
+        /**
+         * Every migration the app registers, in order. [build] and the migration tests both use this
+         * list, so a migration that is written but left out of it fails a test (MigrationRegistryTest).
+         * Add each new migration here, after its definition.
+         */
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+        )
     }
 }
+
+/** A favorite as MIGRATION_5_6 reads it. */
+private class FavoriteSeedRow(val streamId: String, val type: String, val addedAt: Long, val inCatalog: Boolean)

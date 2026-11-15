@@ -18,10 +18,11 @@ const val SECTION_LIVE_TV = "livetv"
 const val SECTION_GUIDE = "guide"
 const val SECTION_HIDDEN = "hidden"
 const val SECTION_PLAYER = "player"
+const val SECTION_BACKUP = "backup"
 const val SECTION_ABOUT = "about"
 
 /**
- * The seven left-hand sections, in the design spec §"Settings" order. [extra] is the
+ * The eight left-hand sections, in the design spec §"Settings" order. [extra] is the
  * value that rides in [EXTRA_SETTINGS_SECTION]; [label] is the rail item text.
  */
 enum class SettingsSection(val label: String, val extra: String) {
@@ -31,6 +32,7 @@ enum class SettingsSection(val label: String, val extra: String) {
     GUIDE("Guide", SECTION_GUIDE),
     HIDDEN("Hidden items", SECTION_HIDDEN),
     PLAYER("Player", SECTION_PLAYER),
+    BACKUP("Backup", SECTION_BACKUP),
     ABOUT("About", SECTION_ABOUT),
     ;
 

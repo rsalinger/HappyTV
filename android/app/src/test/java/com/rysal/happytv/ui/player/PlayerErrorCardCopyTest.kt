@@ -1,5 +1,6 @@
 package com.rysal.happytv.ui.player
 
+import com.rysal.happytv.data.network.InsecureRedirectException
 import android.app.Application
 import android.view.KeyEvent
 import android.view.ViewGroup

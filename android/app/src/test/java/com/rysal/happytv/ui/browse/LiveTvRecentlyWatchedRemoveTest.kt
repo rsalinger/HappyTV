@@ -291,7 +291,7 @@ class LiveTvRecentlyWatchedRemoveTest {
         // F-57: the pane must not be left with nothing focused after the
         // last remove. The fix wires a FocusRequester on the empty state's
         // container Box (before HtEmptyState in the modifier chain), so
-        // `focusedButton.tryRequestFocus()` finds the CTA button as the
+        // `focusedButton.tryRequest()` finds the CTA button as the
         // first focusable after it. The very next D-pad press therefore
         // acts on a visible focused element, not the header back button.
         awaitExists(hasText("Browse all channels") and isFocused())

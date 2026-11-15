@@ -43,10 +43,6 @@ abstract class RecentChannelDao {
     @Query("DELETE FROM recent_channels WHERE streamId = :streamId")
     abstract suspend fun remove(streamId: String)
 
-    /** Housekeeping: drop entries older than the keep window. */
-    @Query("DELETE FROM recent_channels WHERE lastWatchedUtcMillis < :cutoffUtcMillis")
-    abstract suspend fun pruneBefore(cutoffUtcMillis: Long)
-
     @Query("DELETE FROM recent_channels")
     abstract suspend fun clear()
 }

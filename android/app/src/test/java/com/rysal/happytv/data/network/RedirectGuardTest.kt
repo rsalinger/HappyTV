@@ -1,4 +1,4 @@
-package com.rysal.happytv.ui.player
+package com.rysal.happytv.data.network
 
 import okhttp3.Call
 import okhttp3.Connection

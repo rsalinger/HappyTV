@@ -186,4 +186,22 @@ class CatalogScreenLogicTest {
         assertEquals("Show (US) (2020)".let { "Show (US)" to "2020" }, splitTitleYear("Show (US) (2020)"))
         assertEquals("Heat (1995) Directors cut" to null, splitTitleYear("Heat (1995) Directors cut"))
     }
+
+    // ------------------------------------------------------------------ #235
+
+    @Test
+    fun `an empty Favorites grid is final before any refresh settles only when no favorites exist`() {
+        assertTrue(emptyAnswerIsFinal(CatalogViewModel.FAVORITES_CATEGORY_ID, categoriesLoaded = false, favoritesKnownEmpty = true))
+        assertFalse(emptyAnswerIsFinal(CatalogViewModel.FAVORITES_CATEGORY_ID, categoriesLoaded = false, favoritesKnownEmpty = false))
+        assertTrue(emptyAnswerIsFinal(CatalogViewModel.FAVORITES_CATEGORY_ID, categoriesLoaded = true, favoritesKnownEmpty = false))
+    }
+
+    @Test
+    fun `provider-backed grids wait for the refresh to settle`() {
+        assertFalse(emptyAnswerIsFinal("drama", categoriesLoaded = false, favoritesKnownEmpty = true))
+        assertFalse(emptyAnswerIsFinal(CatalogViewModel.CONTINUE_CATEGORY_ID, categoriesLoaded = false, favoritesKnownEmpty = true))
+        assertFalse(emptyAnswerIsFinal(CatalogViewModel.ALL_CATEGORY_ID, categoriesLoaded = false))
+        assertFalse(emptyAnswerIsFinal(CatalogViewModel.RECENT_CATEGORY_ID, categoriesLoaded = false))
+        assertTrue(emptyAnswerIsFinal("drama", categoriesLoaded = true))
+    }
 }

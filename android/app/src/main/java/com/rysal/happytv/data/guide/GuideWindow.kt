@@ -2,7 +2,6 @@ package com.rysal.happytv.data.guide
 
 import java.time.Instant
 import java.time.ZoneId
-import java.util.concurrent.TimeUnit
 
 /**
  * The guide's two-hour window (spec #7 section 3.4):
@@ -28,10 +27,6 @@ class GuideWindow(
 ) {
     /** Window end, exclusive = start + 2 hours. */
     val endUtcMillis: Long = startUtcMillis + WINDOW_MILLIS
-
-    /** Minutes from the window start to [utcMillis] (may be negative/out of range). */
-    fun minutesFromStart(utcMillis: Long): Long =
-        TimeUnit.MILLISECONDS.toMinutes(utcMillis - startUtcMillis)
 
     /** Timeline x for [utcMillis], design px relative to the timeline's left edge. */
     fun xOf(utcMillis: Long): Float = (utcMillis - startUtcMillis) / 60_000.0f * PX_PER_MINUTE

@@ -228,7 +228,8 @@ class HouseholdBackupTest {
         )
         dir.mkdirs()
         backup.file.writeText(
-            kotlinx.serialization.json.Json.encodeToString(
+            // As the real writer does (encodeDefaults = true), so the file says its version.
+            kotlinx.serialization.json.Json { encodeDefaults = true }.encodeToString(
                 HouseholdBackupFile.serializer(),
                 HouseholdBackupFile(settings = restored),
             ),

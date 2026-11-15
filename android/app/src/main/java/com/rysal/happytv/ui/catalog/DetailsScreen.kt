@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +37,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.rysal.happytv.perf.HtvPerf
 import com.rysal.happytv.ui.focus.awaitFocus
 import com.rysal.happytv.ui.focus.requestWhenAttached
 import com.rysal.happytv.ui.focus.tryRequest
@@ -95,6 +97,9 @@ fun DetailsScreen(
     /** The resume point to start from, or null to start at the beginning. */
     onPlay: (CatalogDetail, ResumePoint?) -> Unit = { _, _ -> },
 ) {
+    // Search and Continue watching open details without the grid's mark: start one (a grid
+    // open set a fresher one, which this keeps).
+    remember { HtvPerf.startIfNotRecent(HtvPerf.DETAILS_OPEN); true }
     val viewModel: CatalogViewModel = viewModel(factory = viewModelFactory)
     val detail by viewModel.detail.collectAsStateWithLifecycle()
     val episodes by viewModel.episodes.collectAsStateWithLifecycle()
@@ -103,6 +108,8 @@ fun DetailsScreen(
     BackHandler(onBack = onBack)
 
     val current = detail ?: return
+    // OK on a poster to the first content (#240): the cached row, before the provider answers.
+    SideEffect { HtvPerf.end(HtvPerf.DETAILS_OPEN, if (current.isSeries) "show" else "movie") }
     val d = browseDesign()
 
     val playButton = rememberFocusRequester()
@@ -312,9 +319,10 @@ fun DetailsScreen(
                 current.ageLabel?.let { add(it) }
                 current.ratingLabel?.let { add(it) }
             }.joinToString(" · ")
-            if (detailsLine.isNotEmpty()) {
+            // Still waiting on the provider's metadata: hold the line so Play does not drop when it lands.
+            if (detailsLine.isNotEmpty() || current.infoPending) {
                 Text(
-                    text = detailsLine,
+                    text = detailsLine.ifEmpty { " " },
                     style = browseType().body,
                     color = HappyTvColors.TextSecondary,
                 )
@@ -326,13 +334,23 @@ fun DetailsScreen(
                 FittingChipRow(spacing = d.px(12)) {
                     current.genres.take(4).forEach { GenreTag(it) }
                 }
+            } else if (current.infoPending && !withEpisodes) {
+                // The genre row's place, invisible, until the provider answers.
+                Spacer(Modifier.height(d.px(20)))
+                Spacer(Modifier.height(d.px(48)))
             }
             if (!withEpisodes) {
                 Spacer(Modifier.height(d.px(24 - PLOT_PAD_Y_PX)))
+                val plotPending = current.infoPending && current.plot == null
                 PlotText(
-                    text = current.plot ?: "Plot not available.",
+                    // Three blank lines while pending: the plot's room, not "not available".
+                    text = if (plotPending) "\n\n" else current.plot ?: "Plot not available.",
                     style = browseType().body.copy(lineHeight = browseType().body.lineHeight * 48f / 44f),
-                    color = if (current.plot == null) HappyTvColors.TextTertiary else HappyTvColors.TextSecondary,
+                    color = when {
+                        plotPending -> Color.Transparent
+                        current.plot == null -> HappyTvColors.TextTertiary
+                        else -> HappyTvColors.TextSecondary
+                    },
                     maxLines = 3,
                     // Nothing to open when there is no plot.
                     focusRequester = plotFocus,
@@ -404,7 +422,7 @@ fun DetailsScreen(
                     ) {
                         current.cast.take(CAST_MAX).forEach { CastAvatar(name = it) }
                     }
-                } else if (!current.isSeries) {
+                } else if (!current.isSeries && !current.infoPending) {
                     Spacer(Modifier.height(d.px(48)))
                     Text(
                         text = "Cast not available.",

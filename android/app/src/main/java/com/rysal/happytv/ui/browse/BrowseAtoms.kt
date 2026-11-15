@@ -58,11 +58,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import android.util.Log
+import com.rysal.happytv.ui.focus.isOk
 import com.rysal.happytv.ui.theme.HappyTvColors
 import com.rysal.happytv.ui.theme.HappyTvDarkColors
 import com.rysal.happytv.ui.theme.HappyTvPlaceholders
@@ -251,9 +253,7 @@ fun Modifier.okHoldKeys(enabled: Boolean = true, onLongClick: (() -> Unit)?): Mo
     DisposableEffect(pressGate) { onDispose { pressGate.cancelHold() } }
     return onPreviewKeyEvent { event ->
         if (!enabled) return@onPreviewKeyEvent false
-        val isEnterKey = event.key == Key.DirectionCenter ||
-            event.key == Key.Enter ||
-            event.key == Key.NumPadEnter
+        val isEnterKey = event.isOk()
         when {
             // The Menu key: for remotes that have one (fires on down).
             event.key == Key.Menu && event.type == KeyEventType.KeyDown &&
@@ -298,9 +298,7 @@ fun Modifier.okHoldKeys(enabled: Boolean = true, onLongClick: (() -> Unit)?): Mo
 fun Modifier.ignoreOrphanEnterUp(): Modifier {
     val guard = remember { OrphanEnterGuard() }
     return onPreviewKeyEvent { event ->
-        val isEnterKey = event.key == Key.DirectionCenter ||
-            event.key == Key.Enter ||
-            event.key == Key.NumPadEnter
+        val isEnterKey = event.isOk()
         when {
             !isEnterKey -> false
             event.type == KeyEventType.KeyDown -> guard.onDown(event.nativeKeyEvent.repeatCount)
@@ -660,6 +658,9 @@ fun HtMenuItem(
  *
  * Without [initialFocus] the menu behaves as it always has: focus stays on
  * whatever opened it.
+ *
+ * With [anchorTo] (the held item's bounds) the menu sits beside that item instead of at
+ * [anchorX]/[anchorY], see [placeMenuBeside].
  */
 @Composable
 fun HtPopupMenu(
@@ -670,6 +671,7 @@ fun HtPopupMenu(
     modifier: Modifier = Modifier,
     widthPx: Int = 600,
     initialFocus: FocusRequester? = null,
+    anchorTo: ArtRect? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     val d = browseDesign()
@@ -693,7 +695,27 @@ fun HtPopupMenu(
     ) {
         Column(
             modifier = Modifier
-                .offsetPx(anchorX, anchorY)
+                .then(
+                    if (anchorTo == null) {
+                        Modifier.offsetPx(anchorX, anchorY)
+                    } else {
+                        // #232: beside the held item, placed with the menu's measured height.
+                        Modifier.layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            val at = placeMenuBeside(
+                                anchorTo,
+                                menuWidth = widthPx,
+                                menuHeight = d.artboardPx(placeable.height.toFloat()).toInt(),
+                            )
+                            layout(placeable.width, placeable.height) {
+                                placeable.place(
+                                    d.windowPx(at.x.toFloat()).toInt(),
+                                    d.windowPx(at.y.toFloat()).toInt(),
+                                )
+                            }
+                        }
+                    },
+                )
                 .width(d.px(widthPx))
                 .background(HappyTvColors.Raised, RoundedCornerShape(d.px(24)))
                 .padding(d.px(16)),
@@ -977,18 +999,18 @@ internal fun posterPlaceholderColor(name: String): Color = HappyTvPlaceholders.P
  * Poster artwork loaded from a panel-provided URL, falling back to the
  * [HtPosterArt] placeholder when there's no URL or the load fails (F-49).
  *
- * Panel rows carry the poster in `stream_icon` for VOD (TMDB
- * `https://image.tmdb.org/t/p/...`) and in `cover` for series - both HTTPS,
- * so the default Coil ImageLoader is enough (cleartext policy gates only
- * `http://` and would need a `networkSecurityConfig` override to matter,
- * which it doesn't for TMDB).
+ * Panel rows carry the poster in `stream_icon` for VOD (usually TMDB
+ * `https://image.tmdb.org/t/p/...`, but a panel may send plain `http://`) and in `cover` for
+ * series. Every address goes through [ArtUrl.checked] first (#238): only `http` or `https`, and
+ * never one that carries the sign-in details or looks like a stream URL; a refused address
+ * paints the placeholder. The default Coil ImageLoader then loads it.
  *
  * A failed request logs one line under the `HtPosterImage` tag (the URL and the throwable):
  * Coil swallows fetch/decode errors by design and the grid just shows the placeholder, so
  * logcat is the only way to tell "no URL reached the composable" from "Coil failed on a URL
  * we did hand it".
  *
- * @param posterUrl The URL to load; null/blank paints only the placeholder.
+ * @param posterUrl The URL to load; null, blank or refused by [ArtUrl.checked] paints only the placeholder.
  * @param name Used for both the a11y content description and the fallback
  *   gradient's stable per-item color.
  * @param sizePx The size the art is drawn at, in device pixels (#72). With it Coil decodes at
@@ -1003,7 +1025,8 @@ fun HtPosterImage(
     sizePx: androidx.compose.ui.unit.IntSize? = null,
     flatPlaceholder: Boolean = false,
 ) {
-    val cleanUrl = posterUrl?.takeIf { it.isNotBlank() }
+    // #238: only http(s) art without sign-in details reaches Coil; the result is memoized per address.
+    val cleanUrl = remember(posterUrl) { ArtUrl.checked(posterUrl) }
     if (flatPlaceholder) {
         // The grid's path: one node per card, and the placeholder colour is Coil's own placeholder,
         // not a second box painted under the image (every pixel would be drawn twice while scrolling).

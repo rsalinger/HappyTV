@@ -2,7 +2,10 @@ package com.rysal.happytv.ui.player
 
 import com.rysal.happytv.ui.catalog.cleanEpisodeTitle
 import com.rysal.happytv.data.Graph
+import com.rysal.happytv.data.dao.CategoryDao
 import com.rysal.happytv.data.dao.EpgProgramDao
+import com.rysal.happytv.data.dao.HiddenChannelDao
+import com.rysal.happytv.data.dao.RecentChannelDao
 import com.rysal.happytv.data.dao.FavoriteDao
 import com.rysal.happytv.data.dao.LiveStreamDao
 import com.rysal.happytv.data.dao.SeriesStreamDao
@@ -34,6 +37,9 @@ interface PlayerRepository {
 
     /** Channel row by id; null = not in the current catalog. */
     suspend fun liveStream(id: String): LiveStream?
+
+    /** Settings > Player: sign-in details may travel over plain HTTP (#21, #238). Default: off. */
+    suspend fun allowSignInOverUnencrypted(): Boolean = false
 
     /** Movie row by id. */
     suspend fun vodStream(id: String): VodStream?
@@ -67,6 +73,16 @@ interface PlayerRepository {
 
     /** Now/next for a channel's `epg_channel_id`, or null without guide data. */
     suspend fun nowNext(epgChannelId: String, nowUtcMillis: Long): PlayerNowNext?
+
+    /**
+     * The recent channels row (#220): up to [RECENT_CHANNELS_MAX] recently watched live channels, newest
+     * first, without [currentStreamId], hidden channels, channels in hidden categories and channels gone
+     * from the lineup, each with the program on now. Default: none (tests that do not care).
+     */
+    suspend fun recentChannels(currentStreamId: String?, nowUtcMillis: Long): List<RecentChannelCard> = emptyList()
+
+    /** Records that a live channel was watched now (recent channels). Default: nothing is kept. */
+    suspend fun recordWatch(streamId: String) {}
 
     suspend fun isFavorite(streamId: String, streamType: StreamType): Boolean
 
@@ -154,6 +170,10 @@ class GraphPlayerRepository(
     private val json: Json,
     private val seriesInfo: suspend (PlayerConnection, String) -> SeriesInfoDto?,
     private val watchProgressDao: WatchProgressDao? = null,
+    private val recentChannelDao: RecentChannelDao? = null,
+    private val hiddenChannelDao: HiddenChannelDao? = null,
+    private val categoryDao: CategoryDao? = null,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : PlayerRepository {
 
     override suspend fun connection(): PlayerConnection? {
@@ -170,6 +190,9 @@ class GraphPlayerRepository(
     override suspend fun liveStream(id: String): LiveStream? = liveStreamDao.getById(id)
 
     override suspend fun vodStream(id: String): VodStream? = vodStreamDao.getById(id)
+
+    override suspend fun allowSignInOverUnencrypted(): Boolean =
+        Graph.settings.settings.first().allowSignInOverUnencrypted
 
     override suspend fun firstEpisode(seriesId: String): PlayerEpisode? = episode(seriesId, null)
 
@@ -234,6 +257,23 @@ class GraphPlayerRepository(
         )
     }
 
+    override suspend fun recentChannels(currentStreamId: String?, nowUtcMillis: Long): List<RecentChannelCard> {
+        val recents = recentChannelDao ?: return emptyList()
+        val ids = recents.recent().first().map { it.streamId }.distinct()
+        if (ids.isEmpty()) return emptyList()
+        val hiddenIds = hiddenChannelDao?.observeIds(StreamType.LIVE)?.first()?.toSet().orEmpty()
+        val hiddenCategories = categoryDao?.getByType(StreamType.LIVE)
+            ?.filter { it.isHidden }?.map { it.id }?.toSet().orEmpty()
+        // Chunked so a long history stays under SQLite's bound-variable limit.
+        val lineup = ids.chunked(400).flatMap { liveStreamDao.getByIds(it) }.associateBy { it.id }
+        return RecentChannels.select(ids, currentStreamId, lineup, hiddenIds, hiddenCategories)
+            .map { RecentChannels.card(it, it.epgChannelId?.let { epg -> nowNext(epg, nowUtcMillis) }) }
+    }
+
+    override suspend fun recordWatch(streamId: String) {
+        recentChannelDao?.recordWatch(streamId, clock())
+    }
+
     override suspend fun isFavorite(streamId: String, streamType: StreamType): Boolean =
         favoriteDao.isFavorite(streamId, streamType)
 
@@ -280,9 +320,6 @@ class GraphPlayerRepository(
                 },
             )
         }
-
-        internal fun firstEpisodeOf(seriesName: String, info: SeriesInfoDto): PlayerEpisode? =
-            episodeOf(seriesName, info, null)
     }
 }
 
@@ -306,4 +343,7 @@ fun Graph.playerRepository(): PlayerRepository = GraphPlayerRepository(
         ).getSeriesInfo(seriesId)
     },
     watchProgressDao = database.watchProgressDao(),
+    recentChannelDao = database.recentChannelDao(),
+    hiddenChannelDao = database.hiddenChannelDao(),
+    categoryDao = database.categoryDao(),
 )

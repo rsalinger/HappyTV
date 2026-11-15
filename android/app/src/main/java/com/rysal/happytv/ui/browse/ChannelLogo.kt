@@ -74,11 +74,22 @@ object ChannelLogoUrl {
      * query keys, a stream-shaped path, and any URL that contains the signed-in [secrets]
      * (username or password, plain or percent-decoded).
      */
-    fun safe(raw: String?, secrets: Collection<String> = emptyList()): String? {
+    fun safe(raw: String?, secrets: Collection<String> = emptyList()): String? =
+        vet(raw, secrets, httpsOnly = true)
+
+    /**
+     * The same checks as [safe] for poster, backdrop and episode art (#238): `http` or `https`
+     * (plain-HTTP art without sign-in details still loads), no user-info, no credential-named query
+     * keys, no stream-shaped path, no signed-in username or password anywhere in the address.
+     */
+    fun safeArt(raw: String?, secrets: Collection<String> = emptyList()): String? =
+        vet(raw, secrets, httpsOnly = false)
+
+    private fun vet(raw: String?, secrets: Collection<String>, httpsOnly: Boolean): String? {
         val text = raw?.trim().orEmpty()
         if (text.isEmpty() || text.length > MAX_LENGTH) return null
         val url = text.toHttpUrlOrNull() ?: return null
-        if (!url.isHttps) return null
+        if (httpsOnly && !url.isHttps) return null
         if (url.username.isNotEmpty() || url.password.isNotEmpty()) return null
         if (url.queryParameterNames.any { it.lowercase(Locale.US) in CREDENTIAL_KEYS }) return null
         val segments = url.pathSegments

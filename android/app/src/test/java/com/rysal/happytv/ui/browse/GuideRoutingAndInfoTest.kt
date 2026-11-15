@@ -89,6 +89,13 @@ class GuideRoutingAndInfoTest {
     }
 
     @Test
+    fun `a Favorites list row names its position in the info band, not the provider number`() {
+        val row = LiveChannelRow(stream(num = 18145), position = 1)
+        assertEquals("1 · Northbay News", infoTargetForList(row, now).band.channelLine)
+        assertEquals("18145 · Northbay News", infoTargetForList(LiveChannelRow(stream(num = 18145)), now).band.channelLine)
+    }
+
+    @Test
     fun `a list row without a now line is No guide info and asks for nothing`() {
         val target = infoTargetForList(LiveChannelRow(stream(replay = false)), now)
 

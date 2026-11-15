@@ -1,5 +1,6 @@
 package com.rysal.happytv.ui.player
 
+import com.rysal.happytv.data.network.InsecureRedirectException
 /**
  * F-68 — what the player error card is allowed to say.
  *

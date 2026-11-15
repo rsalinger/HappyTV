@@ -1,4 +1,4 @@
-package com.rysal.happytv.ui.player
+package com.rysal.happytv.data.network
 
 import com.rysal.happytv.data.Graph
 import com.rysal.happytv.perf.HtvPerf
@@ -23,7 +23,9 @@ internal class InsecureRedirectException :
     ProtocolException("Refused an HTTPS to HTTP redirect that carries sign-in details")
 
 /**
- * The redirect policy behind playback (#21, decided 2026-10-23).
+ * The redirect policy behind playback (#21, decided 2026-10-23), also applied
+ * to the Xtream API client and the guide download (#237) because their URLs
+ * carry the username and password in the query.
  *
  * Xtream panels commonly answer an HTTPS `/movie/...` request with a 302 to a
  * plain-HTTP CDN. That is fine while the target is only a CDN path (the
@@ -49,17 +51,23 @@ internal class RedirectGuard(
     private val log: (event: String, detail: String) -> Unit = { event, detail ->
         HtvPerf.log(event, 0L, detail)
     },
+    /** Event-name prefix: `player`, `api` or `guide`, so a log line says which client refused. */
+    private val eventPrefix: String = PLAYER,
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val hop = chain.request().url
         val origin = chain.call().request().url
         if (origin.isHttps && !hop.isHttps) {
-            val carries = carriesCredentials(hop, credentials())
+            // The call's own URL counts too: at sign-in the details are not saved
+            // yet, but the API and guide URLs carry them in `username`/`password`.
+            val secrets = credentials() +
+                listOfNotNull(origin.queryParameter("username"), origin.queryParameter("password"))
+            val carries = carriesCredentials(hop, secrets)
             if (carries) {
                 val overridden = allowOverride()
                 log(
-                    if (overridden) EVENT_ALLOWED else EVENT_REFUSED,
+                    eventName(eventPrefix, overridden),
                     "httpsToHttp=true credentialsInTarget=true override=$overridden",
                 )
                 if (!overridden) throw InsecureRedirectException()
@@ -69,15 +77,25 @@ internal class RedirectGuard(
     }
 
     companion object {
-        const val EVENT_REFUSED = "player.redirect.refused"
-        const val EVENT_ALLOWED = "player.redirect.allowed"
+        const val PLAYER = "player"
+        const val API = "api"
+        const val GUIDE = "guide"
+        private const val REFUSED = "refused"
+        private const val ALLOWED = "allowed"
+        const val EVENT_REFUSED = "$PLAYER.redirect.$REFUSED"
+        const val EVENT_ALLOWED = "$PLAYER.redirect.$ALLOWED"
+
+        /** `<prefix>.redirect.allowed` or `.refused`; the player's two names are the constants above. */
+        fun eventName(prefix: String, allowed: Boolean): String =
+            "$prefix.redirect." + if (allowed) ALLOWED else REFUSED
 
         /** Shortest secret matched inside a longer path segment or value. */
         private const val MIN_SUBSTRING_LENGTH = 6
 
         /** Production wiring: the saved login and the device-level Settings override. */
-        fun production(): RedirectGuard = RedirectGuard(
-            // Runs on Media3's loader thread, only on an HTTPS to HTTP hop.
+        fun production(eventPrefix: String = PLAYER): RedirectGuard = RedirectGuard(
+            eventPrefix = eventPrefix,
+            // Runs on the network thread (Media3 loader, OkHttp dispatcher), only on an HTTPS to HTTP hop.
             credentials = {
                 runBlocking { Graph.securedCredentials.current() }
                     ?.let { listOf(it.username, it.password) }

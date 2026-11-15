@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.rysal.happytv.ui.player.ChannelListSource
 
 /**
  * How the combined Live TV screen talks to the activity's player host (#16).
@@ -38,6 +39,12 @@ class LivePlayback(
      * SurfaceView hole.
      */
     var overlayOpen: Boolean by mutableStateOf(false)
+
+    /**
+     * #224: the list the viewer is playing from (Favorites, All channels, a category), set by the screen just
+     * before it asks to play a channel; the host keeps it for channel up/down.
+     */
+    var channelList: ChannelListSource = ChannelListSource.OwnCategory
 
     /** The live channel playing in the preview (or full screen), null when nothing plays. */
     val playingStreamId: String? get() = playingStreamIdProvider()

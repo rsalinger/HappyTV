@@ -7,7 +7,6 @@ import com.rysal.happytv.data.dao.EpgProgramDao
 import com.rysal.happytv.data.dao.FavoriteDao
 import com.rysal.happytv.data.dao.LiveStreamDao
 import com.rysal.happytv.data.dao.RecentChannelDao
-import com.rysal.happytv.data.entity.Category
 import com.rysal.happytv.data.entity.StreamType
 import com.rysal.happytv.data.network.EpgListingDto
 import com.rysal.happytv.data.network.JsonCoerce
@@ -140,18 +139,6 @@ class GuideRepository(
         }
     }
 
-    /** `{categoryId → channel count}` across the LIVE catalog: the rail's counts, without hydrating channels. */
-    fun observeLiveCategoryCounts(): Flow<Map<String, Int>> =
-        liveDao.observeCounts().map { rows -> rows.associate { it.categoryId to it.count } }
-
-    /**
-     * The visible LIVE categories (`isHidden = 0`) — the guide rail's row
-     * source (F-44). Hidden categories vanish from here, which is the same
-     * list Live TV's rail reads, so one hide empties both rails.
-     */
-    fun observeLiveCategories(): Flow<List<Category>> =
-        categoryDao.observeVisible(StreamType.LIVE)
-
     /**
      * Long-press "Hide category" on the guide rail: flips the durable hidden
      * flag through the same [CategoryDao.toggleHidden] the other screens use,
@@ -162,46 +149,11 @@ class GuideRepository(
     }
 
     /**
-     * Programmes overlapping the window for [keys] only (the grid's channels),
-     * grouped by store key. Re-queried when the guide store is written, so a fetch
-     * landing still rebuilds the grid; reads use the `(channelId, start)` index
-     * instead of scanning every channel's programmes.
-     */
-    fun observeWindowPrograms(
-        keys: Collection<String>,
-        fromUtcMillis: Long,
-        toUtcMillis: Long,
-    ): Flow<Map<String, List<GuideProgram>>> =
-        epgDao.observeStoreVersion().distinctUntilChanged().map {
-            // Titles and times only (#15): the focused program's description is one
-            // single-row read, [programAt], not part of every window.
-            epgDao.getWindowForChannels(keys, fromUtcMillis, toUtcMillis)
-                .groupBy { it.channelId }
-                .mapValues { (_, list) ->
-                    list.map {
-                        GuideProgram(
-                            channelId = it.channelId,
-                            title = it.title,
-                            description = null,
-                            startUtcMillis = it.startUtcMillis,
-                            endUtcMillis = it.endUtcMillis,
-                        )
-                    }
-                }
-        }
-
-    /**
      * The one programme of [key] on at [atUtcMillis], with its description (#15), or
      * null. Runs on the IO dispatcher; callers debounce it on focus changes.
      */
     suspend fun programAt(key: String, atUtcMillis: Long): GuideProgram? =
         withContext(Dispatchers.IO) { epgDao.programAt(key, atUtcMillis)?.toGuideProgram() }
-
-    /** Per-channel "has ever had guide rows" counts for [keys], for No guide info vs data. */
-    fun observeGuideCounts(keys: Collection<String>): Flow<Map<String, Int>> =
-        epgDao.observeStoreVersion().distinctUntilChanged().map {
-            epgDao.getCountsForChannels(keys).associate { it.channelId to it.count }
-        }
 
     /**
      * One window of programmes **and** the "has guide info" counts, behind one store-version

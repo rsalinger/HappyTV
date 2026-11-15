@@ -9,7 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocusable
 import androidx.compose.ui.test.isFocused
@@ -83,7 +83,6 @@ class CleartextSheetFocusTest {
                         onSubmit = {},
                         onRetry = {},
                         onChangeServer = {},
-                        onM3uPressed = {},
                         onOpenUrlFormats = {},
                         onCloseUrlFormats = {},
                         onPickUrlFormat = {},
@@ -105,7 +104,7 @@ class CleartextSheetFocusTest {
      * a "Use HTTPS" descendant, so without it the matcher finds two nodes and
      * the assertion reports "found 2 nodes" instead of where focus is.
      */
-    private fun button(label: String) = hasAnyDescendant(hasText(label)) and !isRoot()
+    private fun button(label: String) = hasClickAction() and hasText(label) and !isRoot()
 
     /**
      * F-66, the mechanism. `focusProperties { canFocus = false }` does not stay

@@ -34,7 +34,6 @@ enum class LoginFocusTarget {
     Eye,
     Remember,
     Submit,
-    M3u,
     Retry,
     ChangeServer,
     FormatOption,
@@ -92,12 +91,6 @@ data class LoginUiState(
     // ------------------------------------------------------------------ phase
     val phase: LoginPhase = LoginPhase.Idle,
 
-    /**
-     * Transient info line shown in the status slot while [phase] is Idle —
-     * the M3U "arrives in v1.1" note. Errors always win over it.
-     */
-    val infoLine: String? = null,
-
     // ------------------------------------------------------------ saved servers
     val savedServers: List<SavedServer> = emptyList(),
     val selectedServerId: String? = null,
@@ -113,11 +106,11 @@ data class LoginUiState(
 ) {
     val isSigningIn: Boolean get() = phase is LoginPhase.Loading
 
-    /** Can't-reach-server state: Retry/Change server replace Sign in, M3U hides. */
+    /** Can't-reach-server state: Retry/Change server replace Sign in. */
     val isUnreachable: Boolean
         get() = (phase as? LoginPhase.Error)?.kind == LoginErrorKind.Unreachable
 
-    /** Signing in, or a failed attempt's message, or the M3U note, or help. */
+    /** Signing in, or a failed attempt's message, or help. */
     val hasSavedServers: Boolean get() = savedServers.isNotEmpty()
 
     /** The panel accepted us — the activity cross-fades to MainActivity. */

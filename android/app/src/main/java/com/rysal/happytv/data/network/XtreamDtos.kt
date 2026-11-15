@@ -66,7 +66,14 @@ data class UserInfoDto(
     val max_connections: String? = null,
     /** e.g. `["ts","m3u8"]` — drives the extension used in stream URLs. */
     val allowed_output_formats: List<String>? = null,
-)
+) {
+    /**
+     * The only copy that may be persisted in the plain settings DataStore (#212):
+     * just the field the app reads back (`allowed_output_formats`). Username,
+     * password and the free-text message never leave memory.
+     */
+    fun forCache(): UserInfoDto = UserInfoDto(allowed_output_formats = allowed_output_formats)
+}
 
 @Serializable
 data class ServerInfoDto(

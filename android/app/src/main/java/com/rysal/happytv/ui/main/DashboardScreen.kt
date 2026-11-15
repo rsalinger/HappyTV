@@ -61,7 +61,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rysal.happytv.data.entity.StreamType
@@ -1542,7 +1541,3 @@ internal fun lastSignedInLabel(
         else -> "Last signed in ${deltaMin / 60} hours ago"
     }
 }
-
-/** Unused-typed-arg guard for Dp imports in some toolchains. */
-@Suppress("unused")
-private val unusedDp: Dp? = null

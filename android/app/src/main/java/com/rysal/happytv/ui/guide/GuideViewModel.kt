@@ -81,7 +81,12 @@ class GuideViewModel(
         val xmltv: Boolean,
         /** The window holds every channel of the selection. */
         val exhausted: Boolean,
-    )
+    ) {
+        /** The same window with its channels in a new order (#221): the programmes stay as read. */
+        fun withChannels(reordered: List<GuideChannel>) = GridData(
+            tag, reordered, programs, range, counts, storeHasGuide, xmltv, exhausted,
+        )
+    }
 
     private val grid = MutableStateFlow<GridData?>(null)
 
@@ -144,10 +149,21 @@ class GuideViewModel(
                 val base = GuideWindow.fromNow(n, zone, d.dayOffset).startUtcMillis
                 GuideTime.loadRange(base, GuideTime.windowStart(base, d, shifted))
             }.distinctUntilChanged()
-            combine(input.filterNotNull(), rowLimit, xmltvMode.filterNotNull(), rangeFlow) { sel, limit, xmltv, range ->
+            // #221: the same channels in a new order (a favorite moved in reorder mode) need no new
+            // read: [setChannels] reorders the grid it holds. Only while the whole selection is in the window.
+            combine(
+                input.filterNotNull().distinctUntilChanged { a, b ->
+                    a.tag == b.tag && a.channels.size <= rowLimit.value && sameMembers(a.channels, b.channels)
+                },
+                rowLimit,
+                xmltvMode.filterNotNull(),
+                rangeFlow,
+            ) { sel, limit, xmltv, range ->
                 Query(sel, limit, xmltv, range)
             }.flatMapLatest { query ->
-                val shown = query.input.channels.take(query.limit)
+                // The latest order, which may be newer than the one that started this read.
+                val latest = input.value?.takeIf { it.tag == query.input.tag } ?: query.input
+                val shown = latest.channels.take(query.limit)
                 val keys = shown.mapNotNull { it.programKey(query.xmltv) }
                 combine(
                     repository.observeWindowWithCounts(keys, query.range.from, query.range.to),
@@ -161,7 +177,7 @@ class GuideViewModel(
                         counts = windowAndCounts.second,
                         storeHasGuide = hasAny,
                         xmltv = query.xmltv,
-                        exhausted = query.input.channels.size <= query.limit,
+                        exhausted = latest.channels.size <= query.limit,
                     )
                 }
             }
@@ -211,7 +227,19 @@ class GuideViewModel(
             rowLimit.value = rowFloor?.takeIf { it.first == tag }?.second?.coerceAtLeast(ROW_PAGE) ?: ROW_PAGE
         }
         input.value = Input(tag, channels)
+        // #221: the same channels in another order (or with other flags): reorder what the grid
+        // holds and redraw, no read of the guide store.
+        val loaded = grid.value
+        if (previous != null && previous.tag == tag && loaded != null && loaded.tag == tag &&
+            channels.size <= rowLimit.value && sameMembers(loaded.channels, channels)
+        ) {
+            grid.value = loaded.withChannels(channels)
+            rebuild()
+        }
     }
+
+    private fun sameMembers(a: List<GuideChannel>, b: List<GuideChannel>): Boolean =
+        a.size == b.size && a.mapTo(HashSet(a.size * 2)) { it.streamId } == b.mapTo(HashSet(b.size * 2)) { it.streamId }
 
     /**
      * Holds at least [count] rows (rounded up to whole [ROW_PAGE]s), so a channel deep in the

@@ -1,5 +1,6 @@
 package com.rysal.happytv.ui.player
 
+import com.rysal.happytv.data.network.InsecureRedirectException
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer
@@ -114,6 +115,48 @@ class PlayerViewModelTest {
         val vm = viewModel(PlayerLaunch.movie("9"), repo)
 
         assertEquals("http://cdn.example/long-coast.mkv", vm.readyContent().url)
+    }
+
+    private fun directLinkVm(
+        link: String,
+        useTls: Boolean,
+        override: Boolean = false,
+    ): PlayerViewModel {
+        val repo = fakeRepository(
+            connection = PlayerConnection("panel.example", 8080, useTls, "u", "pass-word"),
+            vod = mapOf("9" to VodStream(id = "9", categoryId = "1", name = "The Long Coast", containerExtension = "mkv", directSource = link)),
+            allowOverride = override,
+        )
+        return viewModel(PlayerLaunch.movie("9"), repo)
+    }
+
+    @Test
+    fun `vod ignores a plain http direct link that carries the sign-in on an https sign-in (#238)`() = runTest {
+        val vm = directLinkVm("http://cdn.example/movie/u/pass-word/9.mkv", useTls = true)
+
+        assertEquals("https://panel.example:8080/movie/u/pass-word/9.mkv", vm.readyContent().url)
+    }
+
+    @Test
+    fun `vod uses that direct link when the override is on or the sign-in is plain http (#238)`() = runTest {
+        val link = "http://cdn.example/movie/u/pass-word/9.mkv"
+
+        assertEquals(link, directLinkVm(link, useTls = true, override = true).readyContent().url)
+        assertEquals(link, directLinkVm(link, useTls = false).readyContent().url)
+    }
+
+    @Test
+    fun `vod builds the movie url for a direct link that is not a web address (#238)`() = runTest {
+        val vm = directLinkVm("file:///sdcard/movie.mkv", useTls = true, override = true)
+
+        assertEquals("https://panel.example:8080/movie/u/pass-word/9.mkv", vm.readyContent().url)
+    }
+
+    @Test
+    fun `vod keeps a plain http direct link without credentials on an https sign-in (#238)`() = runTest {
+        val vm = directLinkVm("http://cdn.example/files/9.mkv", useTls = true)
+
+        assertEquals("http://cdn.example/files/9.mkv", vm.readyContent().url)
     }
 
     @Test
@@ -885,8 +928,11 @@ class PlayerViewModelTest {
         allowedFormats: List<String>? = null,
         nowNext: PlayerNowNext? = null,
         gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
+        allowOverride: Boolean = false,
     ) = object : PlayerRepository {
         val favorites = mutableSetOf<String>()
+
+        override suspend fun allowSignInOverUnencrypted(): Boolean = allowOverride
 
         override suspend fun connection(): PlayerConnection? {
             gate?.await()

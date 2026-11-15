@@ -35,6 +35,8 @@ internal fun LiveTvInfoRegion(
     focusedGuide: State<GuideFocus?>,
     focusedChannelId: State<String?>,
     focusedCategory: LiveCategoryItem?,
+    /** #221: while Favorites is reordered the mode panel takes the info band's place. */
+    reorder: ReorderUi? = null,
     loadProgram: suspend (streamId: String, epgChannelId: String?, atUtcMillis: Long) -> GuideProgram?,
     /** False while a channel plays: the slot paints nothing so the player's surface shows (F-48). */
     showPreviewArt: Boolean,
@@ -83,6 +85,10 @@ internal fun LiveTvInfoRegion(
         } ?: target.band
     }
 
-    InfoBand(category = focusedCategory, info = infoBand, description = loadedProgram?.description)
+    if (reorder != null) {
+        ReorderPanel(reorder = reorder, channels = channels)
+    } else {
+        InfoBand(category = focusedCategory, info = infoBand, description = loadedProgram?.description)
+    }
     PreviewSlot(channel = infoChannel, showArt = showPreviewArt)
 }

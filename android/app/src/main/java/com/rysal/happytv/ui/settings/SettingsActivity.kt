@@ -29,6 +29,8 @@ class SettingsActivity : ComponentActivity() {
         )
     }
 
+    private val backupViewModel: BackupViewModel by viewModels { BackupViewModel.factory() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -39,6 +41,7 @@ class SettingsActivity : ComponentActivity() {
                         onGoToDashboard = { goToDashboard() },
                         onGoToSignIn = { goToSignIn() },
                         viewModel = viewModel,
+                        backupViewModel = backupViewModel,
                     )
                 }
             }

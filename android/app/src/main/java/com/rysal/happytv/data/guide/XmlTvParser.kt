@@ -67,13 +67,12 @@ object XmlTvParser {
 
     /**
      * Streaming parse as a lazy [Sequence] — F-52's input to
-     * `EpgProgramDao.replaceAllStreamed`, so the whole replace
-     * (`deleteAll` + batched inserts) lives in one Room transaction that
-     * rolls back to the last-good guide when the document turns out to be
-     * malformed mid-way. The consumer pulls one programme at a time; the
+     * the guide import, which stages the rows in chunks (F-65) and promotes them
+     * only once the whole document parsed, so a document that turns out to be
+     * malformed mid-way leaves the last-good guide in place. The consumer pulls one programme at a time; the
      * list of programmes is never materialised. An [XmlPullParserException]
      * (or any IO error) surfaces on the consuming `for` loop's iteration,
-     * exactly where the transaction can still undo the wipe.
+     * exactly where the import can still stop before it promotes anything.
      *
      * The caller owns [input] and must close it after the sequence has been
      * drained (or abandoned).

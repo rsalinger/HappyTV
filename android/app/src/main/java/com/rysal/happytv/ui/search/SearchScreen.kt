@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +66,12 @@ import com.rysal.happytv.ui.catalog.PosterCaption
 import com.rysal.happytv.ui.catalog.focusMarquee
 import com.rysal.happytv.ui.catalog.QualityBadge
 import com.rysal.happytv.ui.browse.HtChannelMark
+import com.rysal.happytv.ui.browse.ArtRect
+import com.rysal.happytv.ui.browse.HtMenuItem
+import com.rysal.happytv.ui.browse.MenuAnchorHolder
+import com.rysal.happytv.ui.browse.toArtRect
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.rysal.happytv.ui.browse.HtPopupMenu
 import com.rysal.happytv.ui.browse.HtPosterImage
 import com.rysal.happytv.ui.browse.browseDesign
 import com.rysal.happytv.ui.browse.browseType
@@ -113,7 +121,17 @@ fun SearchOverlay(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    // #232: the result whose hold-OK menu is open (null = closed), and the stars on results.
+    val favorites by viewModel.favoriteState.collectAsStateWithLifecycle()
+    var menu by remember { mutableStateOf<ResultMenuTarget?>(null) }
+    val menuItemFocus = remember { FocusRequester() }
+
     BackHandler { onBack() }
+    // Registered after the one above, so it wins while the menu is open: Back closes the menu only.
+    BackHandler(enabled = menu != null) {
+        menu?.returnFocus?.tryRequest()
+        menu = null
+    }
 
     // The field is focused on open and the system keyboard comes with it.
     LaunchedEffect(Unit) {
@@ -129,8 +147,9 @@ fun SearchOverlay(
     // "See all" switches the scope, which removes the line that held focus. Once the
     // filtered results are in, focus goes to the first result (or the chip when empty).
     var focusAfterScopeChange by remember { mutableStateOf(false) }
-    LaunchedEffect(state.scope, rows) {
-        if (focusAfterScopeChange) {
+    LaunchedEffect(state.scope, state.phase, rows) {
+        // #257: the scope changes at once but its results come later; wait for them.
+        if (focusAfterScopeChange && !state.phase.isPending) {
             listState.scrollToItem(0)
             if (!firstResult.tryRequest()) chipFocus[state.scope.ordinal].tryRequest()
             focusAfterScopeChange = false
@@ -208,6 +227,15 @@ fun SearchOverlay(
                     color = HappyTvColors.TextSecondary,
                 )
 
+                SearchPhase.SEARCHING -> Text(
+                    text = state.scope.searchingText,
+                    style = type.compactBody,
+                    color = HappyTvColors.TextSecondary,
+                )
+
+                // Inside the grace period: nothing yet, so a fast answer never flashes the text.
+                SearchPhase.WAITING -> Unit
+
                 SearchPhase.EMPTY_LIBRARY -> Text(
                     // Same wording the dashboard's signed-out tiles use.
                     text = "Sign in to load channels",
@@ -237,11 +265,42 @@ fun SearchOverlay(
                     // swallows Down and Right and hides the chips. Left from the chips reaches
                     // the field on purpose.
                     upTarget = chipFocus[state.scope.ordinal],
+                    favorites = favorites,
+                    onOpenMenu = { menu = it },
                     onPlayChannel = onPlayChannel,
                     onOpenDetails = onOpenDetails,
                     onSeeAll = { scope ->
                         focusAfterScopeChange = true
                         viewModel.selectScope(scope)
+                    },
+                )
+            }
+        }
+
+        menu?.let { target ->
+            val isFavorite = favorites.contains(target.type, target.id)
+            // Every way out hands focus back to the result *before* the menu leaves composition,
+            // while its requester is still attached (the Live TV channel menu does the same).
+            val dismiss: () -> Unit = {
+                target.returnFocus.tryRequest()
+                menu = null
+            }
+            HtPopupMenu(
+                title = target.name,
+                onDismiss = dismiss,
+                anchorX = MENU_X_PX,
+                anchorY = MENU_Y_PX,
+                anchorTo = target.anchor,
+                initialFocus = menuItemFocus,
+            ) {
+                HtMenuItem(
+                    label = favoriteMenuLabel(isFavorite),
+                    icon = Icons.Filled.Star,
+                    iconTint = if (isFavorite) HappyTvColors.Accent else HappyTvColors.TextSecondary,
+                    focusRequester = menuItemFocus,
+                    onClick = {
+                        viewModel.toggleFavorite(target.id, target.type)
+                        dismiss()
                     },
                 )
             }
@@ -266,6 +325,16 @@ fun SearchOverlay(
 }
 
 // -------------------------------------------------------------- result rows
+
+/** #232: the result a hold-OK menu belongs to; [returnFocus] is that result's own focus target. */
+internal data class ResultMenuTarget(
+    val type: StreamType,
+    val id: String,
+    val name: String,
+    val returnFocus: FocusRequester,
+    /** The held result's bounds on the artboard; the menu sits beside it. */
+    val anchor: ArtRect? = null,
+)
 
 /** One lazily composed line of the results list. */
 internal sealed interface ResultRow {
@@ -337,6 +406,8 @@ private fun ResultsList(
     listState: LazyListState,
     firstResult: FocusRequester,
     upTarget: FocusRequester,
+    favorites: SearchFavorites,
+    onOpenMenu: (ResultMenuTarget) -> Unit,
     onPlayChannel: (String) -> Unit,
     onOpenDetails: (String, StreamType) -> Unit,
     onSeeAll: (SearchScope) -> Unit,
@@ -375,7 +446,9 @@ private fun ResultsList(
                     row.cards.forEachIndexed { index, channel ->
                         ChannelCard(
                             channel = channel,
+                            isFavorite = favorites.contains(StreamType.LIVE, channel.id),
                             onClick = { onPlayChannel(channel.id) },
+                            onMenu = { focus, anchor -> onOpenMenu(ResultMenuTarget(StreamType.LIVE, channel.id, channel.name, focus, anchor)) },
                             modifier = resultFocus(isFirstRow, isFirstRow && index == 0, firstResult, upTarget),
                         )
                     }
@@ -383,7 +456,9 @@ private fun ResultsList(
 
                 is ResultRow.Posters -> PosterRow(
                     posters = row.posters,
+                    isFavorite = { favorites.contains(row.type, it) },
                     onOpen = { onOpenDetails(it, row.type) },
+                    onMenu = { poster, focus, anchor -> onOpenMenu(ResultMenuTarget(row.type, poster.id, poster.name, focus, anchor)) },
                     focusFor = { index -> resultFocus(isFirstRow, isFirstRow && index == 0, firstResult, upTarget) },
                 )
 
@@ -531,20 +606,28 @@ private fun resultFocus(firstRow: Boolean, isFirst: Boolean, entry: FocusRequest
 @Composable
 private fun ChannelCard(
     channel: SearchChannelResult,
+    isFavorite: Boolean,
     onClick: () -> Unit,
+    onMenu: (FocusRequester, ArtRect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val d = browseDesign()
     val type = browseType()
     var focused by remember { mutableStateOf(false) }
+    // #232: where focus goes back to when the hold-OK menu closes. Ahead of the clickable it targets.
+    val returnFocus = remember { FocusRequester() }
+    val anchorHolder = remember { MenuAnchorHolder() }
     Row(
         modifier = modifier
             .size(width = d.px(CHANNEL_CARD_W_PX), height = d.px(CHANNEL_CARD_H_PX))
+            .onGloballyPositioned { anchorHolder.coordinates = it }
             .onFocusChanged { focused = it.hasFocus }
+            .focusRequester(returnFocus)
             .htvClickableSurface(
                 radiusPx = 20,
                 background = HappyTvColors.Surface,
                 onClick = onClick,
+                onLongClick = { onMenu(returnFocus, anchorHolder.coordinates.toArtRect(d)) },
             )
             .padding(start = d.px(16), end = d.px(20)),
         verticalAlignment = Alignment.CenterVertically,
@@ -568,6 +651,15 @@ private fun ChannelCard(
             overflow = if (focused) TextOverflow.Clip else TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).focusMarquee(focused),
         )
+        if (isFavorite) {
+            Spacer(Modifier.width(d.px(8)))
+            Icon(
+                imageVector = Icons.Filled.Star,
+                contentDescription = "In favorites",
+                tint = HappyTvColors.Accent,
+                modifier = Modifier.size(d.px(24)),
+            )
+        }
         channelNumberText(channel.numberLabel)?.let { number ->
             Spacer(Modifier.width(d.px(12)))
             Text(
@@ -588,7 +680,9 @@ internal fun channelNumberText(numberLabel: String): String? =
 @Composable
 private fun PosterRow(
     posters: List<SearchPosterResult>,
+    isFavorite: (String) -> Boolean,
     onOpen: (String) -> Unit,
+    onMenu: (SearchPosterResult, FocusRequester, ArtRect?) -> Unit,
     focusFor: (Int) -> Modifier,
 ) {
     val d = browseDesign()
@@ -603,6 +697,8 @@ private fun PosterRow(
                 verticalArrangement = Arrangement.spacedBy(d.px(CAPTION_GAP_PX)),
             ) {
                 var focused by remember { mutableStateOf(false) }
+                val returnFocus = remember { FocusRequester() }
+                val anchorHolder = remember { MenuAnchorHolder() }
                 Box {
                     HtPosterImage(
                         posterUrl = poster.posterUrl,
@@ -610,14 +706,35 @@ private fun PosterRow(
                         modifier = focusFor(index)
                             .size(width = d.px(POSTER_W_PX), height = d.px(POSTER_H_PX))
                             .semantics { contentDescription = poster.name }
+                            .onGloballyPositioned { anchorHolder.coordinates = it }
                             .onFocusChanged { focused = it.hasFocus }
+                            .focusRequester(returnFocus)
                             .htvClickableSurface(
                                 radiusPx = 16,
                                 background = HappyTvColors.Surface,
                                 onClick = { onOpen(poster.id) },
+                                onLongClick = { onMenu(poster, returnFocus, anchorHolder.coordinates.toArtRect(d)) },
                             ),
                     )
                     poster.quality?.let { QualityBadge(label = it, modifier = Modifier.padding(d.px(8))) }
+                    if (isFavorite(poster.id)) {
+                        // Same badge as the Movies and Shows grid.
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(d.px(8))
+                                .size(d.px(40))
+                                .background(HappyTvColors.PosterBadge, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = "In favorites",
+                                tint = HappyTvColors.Accent,
+                                modifier = Modifier.size(d.px(24)),
+                            )
+                        }
+                    }
                 }
                 PosterCaption(title = poster.name, year = poster.year, focused = focused)
             }
@@ -662,3 +779,6 @@ private const val RING_MARGIN_PX = 24
 private const val SAFE_BOTTOM_PX = 54
 private const val FADE_H_PX = SAFE_BOTTOM_PX
 private const val RING_ROOM_PX = 4
+/** #232: fallback position (600 wide, centered below the field) when the held result has no bounds. */
+private const val MENU_X_PX = 660
+private const val MENU_Y_PX = 300

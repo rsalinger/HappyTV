@@ -46,15 +46,15 @@ class LoginViewModel internal constructor(
     // ------------------------------------------------------------------ inputs
 
     fun onServerUrlChange(value: String) = _state.update {
-        it.copy(serverUrl = value, serverUrlError = null, infoLine = null)
+        it.copy(serverUrl = value, serverUrlError = null)
     }
 
     fun onUsernameChange(value: String) = _state.update {
-        it.copy(username = value, usernameError = null, infoLine = null)
+        it.copy(username = value, usernameError = null)
     }
 
     fun onPasswordChange(value: String) = _state.update {
-        it.copy(password = value, passwordError = null, infoLine = null)
+        it.copy(password = value, passwordError = null)
     }
 
     fun onRememberMeToggle() = _state.update { it.copy(rememberMe = !it.rememberMe) }
@@ -73,11 +73,6 @@ class LoginViewModel internal constructor(
         it.copy(serverUrl = url, serverUrlError = null, overlay = LoginOverlay.None, focusTarget = LoginFocusTarget.ServerUrl)
     }
 
-    /** "M3U playlist" pressed: explain that it arrives in v1.1 (status line). */
-    fun onM3uPressed() = _state.update {
-        it.copy(infoLine = M3U_INFO_LINE, focusTarget = LoginFocusTarget.M3u)
-    }
-
     /**
      * "Saved on this TV" row picked: fill URL + username, clear the password,
      * move focus to Password (design spec "Sign in", saved-servers state).
@@ -92,7 +87,6 @@ class LoginViewModel internal constructor(
             usernameError = null,
             passwordError = null,
             selectedServerId = server.id,
-            infoLine = null,
             focusTarget = LoginFocusTarget.Password,
         )
     }
@@ -102,7 +96,7 @@ class LoginViewModel internal constructor(
 
     /** "Change server" (unreachable state): clear the error, focus Server URL. */
     fun onChangeServer() = _state.update {
-        it.copy(phase = LoginPhase.Idle, infoLine = null, focusTarget = LoginFocusTarget.ServerUrl)
+        it.copy(phase = LoginPhase.Idle, focusTarget = LoginFocusTarget.ServerUrl)
     }
 
     /** "Retry" (unreachable state): attempt the same login again. */
@@ -133,7 +127,6 @@ class LoginViewModel internal constructor(
                     usernameError = missing.firstOrNull { e -> e.first == LoginFocusTarget.Username }?.second,
                     passwordError = missing.firstOrNull { e -> e.first == LoginFocusTarget.Password }?.second,
                     phase = if (it.phase is LoginPhase.Error) LoginPhase.Idle else it.phase,
-                    infoLine = null,
                     focusTarget = missing.first().first,
                 )
             }
@@ -145,7 +138,6 @@ class LoginViewModel internal constructor(
                 it.copy(
                     serverUrlError = INVALID_URL_MESSAGE,
                     phase = LoginPhase.Idle,
-                    infoLine = null,
                     focusTarget = LoginFocusTarget.ServerUrl,
                 )
             }
@@ -225,7 +217,6 @@ class LoginViewModel internal constructor(
                     serverUrlError = null,
                     usernameError = null,
                     passwordError = null,
-                    infoLine = null,
                     focusTarget = null,
                 )
             }
@@ -330,7 +321,6 @@ class LoginViewModel internal constructor(
         const val DEFAULT_LOGIN_TIMEOUT_MILLIS = 15_000L
 
         const val CANT_REACH_MESSAGE = "Can’t reach the server. Check the URL and your network."
-        const val M3U_INFO_LINE = "Playlists from an M3U link arrive in v1.1."
         const val INVALID_URL_MESSAGE = "Enter a valid server URL, like provider.example:8080."
 
         /** Mirrors `RefreshCoordinator`'s "Couldn't reach …" failure prefix. */

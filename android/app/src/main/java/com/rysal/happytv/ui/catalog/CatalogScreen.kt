@@ -71,7 +71,12 @@ import com.rysal.happytv.ui.browse.BODY_X_KEEP_OPEN_PX
 import com.rysal.happytv.ui.browse.HEADER_TOP_PX
 import com.rysal.happytv.ui.browse.HtBottomFade
 import com.rysal.happytv.ui.browse.HtHeader
+import com.rysal.happytv.ui.browse.ArtRect
 import com.rysal.happytv.ui.browse.HtMenuItem
+import com.rysal.happytv.ui.browse.MenuAnchorHolder
+import com.rysal.happytv.ui.browse.toArtRect
+import com.rysal.happytv.ui.search.favoriteMenuLabel
+import androidx.compose.ui.layout.onGloballyPositioned
 import com.rysal.happytv.ui.browse.HtPopupMenu
 import com.rysal.happytv.ui.browse.HtPosterImage
 import com.rysal.happytv.ui.browse.RAIL_ANIMATION_MILLIS
@@ -87,6 +92,7 @@ import com.rysal.happytv.ui.browse.railEntryKeyOf
 import com.rysal.happytv.ui.browse.railKeyAfterHide
 import com.rysal.happytv.ui.browse.scrollRailTo
 import com.rysal.happytv.ui.focus.awaitFocus
+import com.rysal.happytv.ui.focus.rememberFocusAfterRemoval
 import com.rysal.happytv.ui.focus.tryRequest
 import com.rysal.happytv.ui.search.ringSafeBringIntoView
 import com.rysal.happytv.ui.theme.HappyTvColors
@@ -124,6 +130,7 @@ fun CatalogScreen(
     val selectionTotal by viewModel.itemsTotal.collectAsStateWithLifecycle()
     val keepOpen by viewModel.keepCategoriesOpen.collectAsStateWithLifecycle()
     val categoriesLoaded by viewModel.categoriesLoaded.collectAsStateWithLifecycle()
+    val favoritesKnownEmpty by viewModel.favoritesKnownEmpty.collectAsStateWithLifecycle()
     val continueCount by viewModel.continueCount.collectAsStateWithLifecycle()
 
     val isMovies = streamType == StreamType.VOD
@@ -134,8 +141,11 @@ fun CatalogScreen(
     val gridReady = grid.loaded && grid.categoryId == selected && !restoring
     // A cold start's rows land after the first (empty) answer: keep the skeleton up until the
     // refresh has settled, so "no movies" never flashes (F-60 / F-64).
-    val showSkeleton = !gridReady || (items.isEmpty() && !categoriesLoaded)
-    val gridEmpty = gridReady && items.isEmpty() && categoriesLoaded
+    // `emptyAnswerIsFinal`: an empty grid is final once the categories have loaded, or at once for
+    // Favorites when the favorites table itself is empty (#235).
+    val emptyIsFinal = emptyAnswerIsFinal(selected, categoriesLoaded, favoritesKnownEmpty)
+    val showSkeleton = !gridReady || (items.isEmpty() && !emptyIsFinal)
+    val gridEmpty = gridReady && items.isEmpty() && emptyIsFinal
 
     val entries = remember(categories, counts, totalItems, favorites.size, selected, streamType, continueCount) {
         catalogRailEntries(streamType, categories, counts, totalItems, favorites.size, selected, continueCount)
@@ -155,9 +165,10 @@ fun CatalogScreen(
     var gridFocusTick by remember { mutableIntStateOf(0) }
     var moreMenuOpen by remember { mutableStateOf(false) }
     var categoryMenu by remember { mutableStateOf<Category?>(null) }
-    // Long-press on a Continue watching poster: "Remove from Continue watching".
-    var continueMenu by remember { mutableStateOf<CatalogItem?>(null) }
-    val continueMenuFocus = remember { FocusRequester() }
+    // Hold OK (or Menu) on a poster: the favorites item, plus "Remove from Continue watching" in
+    // Continue watching (#232).
+    var itemMenu by remember { mutableStateOf<CatalogMenuTarget?>(null) }
+    val itemMenuFocus = remember { FocusRequester() }
     // The poster OK was pressed on; kept across the details screen so Back lands on it.
     var openedId by rememberSaveable { mutableStateOf<String?>(null) }
     // The poster that carries [gridFocus]: the first one, or the one to come back to.
@@ -208,12 +219,31 @@ fun CatalogScreen(
         }
     }
 
+    // #232 (rules of #228 / #230), #242: removing a favorite from Favorites. The shared holder waits
+    // for the Room emission to drop it; focus then goes to the poster that took its place, else the
+    // one before it, else (the last favorite) Favorites in the rail.
+    val removal = rememberFocusAfterRemoval(
+        items = items,
+        keyOf = { it.id },
+        ready = gridReady,
+        resetKey = selected,
+    )
+    LaunchedEffect(removal.focusKey) {
+        val target = removal.focusKey ?: return@LaunchedEffect
+        removal.focusHandled()
+        openedId = target
+        gridFocusTick++
+    }
+    LaunchedEffect(removal.emptiedTo) {
+        if (removal.emptiedTo != null) fanOutRail()
+    }
+
     // Entry: once the screen has its first category's posters, the D-pad starts on the first
     // poster; with nothing to show it starts on the rail.
     var entryFocusDone by remember { mutableStateOf(false) }
-    LaunchedEffect(gridReady, categoriesLoaded, items.isEmpty()) {
+    LaunchedEffect(gridReady, emptyIsFinal, items.isEmpty()) {
         if (entryFocusDone || !gridReady) return@LaunchedEffect
-        if (items.isEmpty() && !categoriesLoaded) return@LaunchedEffect
+        if (items.isEmpty() && !emptyIsFinal) return@LaunchedEffect
         entryFocusDone = true
         withFrameNanos { }
         if (currentItems.isNotEmpty()) gridFocusTick++ else fanOutRail()
@@ -231,7 +261,7 @@ fun CatalogScreen(
     }
 
     // catalog.open / catalog.category end on the first frame drawn once the posters are in.
-    val painted = gridReady && (items.isNotEmpty() || categoriesLoaded)
+    val painted = gridReady && (items.isNotEmpty() || emptyIsFinal)
     LaunchedEffect(selected, painted) {
         if (!painted) return@LaunchedEffect
         withFrameNanos { }
@@ -260,9 +290,9 @@ fun CatalogScreen(
         if (overlayShown || currentItems.isEmpty()) railFocusTick++ else gridFocusTick++
     }
 
-    val menuOpen = moreMenuOpen || categoryMenu != null || continueMenu != null
-    val dismissContinueMenu: () -> Unit = {
-        continueMenu = null
+    val menuOpen = moreMenuOpen || categoryMenu != null || itemMenu != null
+    val dismissItemMenu: () -> Unit = {
+        itemMenu = null
         gridFocusTick++
     }
     val dismissCategoryMenu: () -> Unit = {
@@ -272,7 +302,7 @@ fun CatalogScreen(
     }
     val handleBack: () -> Unit = {
         when {
-            continueMenu != null -> dismissContinueMenu()
+            itemMenu != null -> dismissItemMenu()
             categoryMenu != null -> dismissCategoryMenu()
             moreMenuOpen -> moreMenuOpen = false
             gridHasFocus -> fanOutRail()
@@ -371,15 +401,17 @@ fun CatalogScreen(
                     gridFocus = gridFocus,
                     onOpen = { item ->
                         openedId = item.id
+                        HtvPerf.start(HtvPerf.DETAILS_OPEN)
                         onItemClick(item)
                     },
-                    onLongPress = { item ->
-                        if (selected == CatalogViewModel.CONTINUE_CATEGORY_ID) {
-                            openedId = item.id
-                            continueMenu = item
-                        } else {
-                            viewModel.toggleFavorite(item.id)
-                        }
+                    onLongPress = { item, anchor ->
+                        // The poster to come back to when the menu closes.
+                        openedId = item.id
+                        itemMenu = CatalogMenuTarget(
+                            item = item,
+                            anchor = anchor,
+                            inContinue = selected == CatalogViewModel.CONTINUE_CATEGORY_ID,
+                        )
                     },
                     onLeftEdge = ::fanOutRail,
                     onLoadMore = viewModel::loadMorePosters,
@@ -435,25 +467,43 @@ fun CatalogScreen(
             }
         }
 
-        continueMenu?.let { item ->
+        itemMenu?.let { target ->
+            val item = target.item
+            val isFavorite = item.id in favorites
             HtPopupMenu(
                 title = item.name,
-                onDismiss = dismissContinueMenu,
+                onDismiss = dismissItemMenu,
                 anchorX = CONTINUE_MENU_X_PX,
                 anchorY = MORE_MENU_Y_PX,
-                widthPx = CONTINUE_MENU_WIDTH_PX,
-                initialFocus = continueMenuFocus,
+                widthPx = if (target.inContinue) CONTINUE_MENU_WIDTH_PX else 600,
+                anchorTo = target.anchor,
+                initialFocus = itemMenuFocus,
             ) {
                 HtMenuItem(
-                    label = "Remove from Continue watching",
-                    icon = Icons.Filled.Close,
-                    focusRequester = continueMenuFocus,
+                    label = favoriteMenuLabel(isFavorite),
+                    icon = Icons.Filled.Star,
+                    iconTint = if (isFavorite) HappyTvColors.Accent else HappyTvColors.TextSecondary,
+                    focusRequester = itemMenuFocus,
                     onClick = {
-                        viewModel.removeFromContinue(item.id)
-                        continueMenu = null
-                        gridFocusTick++
+                        itemMenu = null
+                        val leavesFavorites = selected == CatalogViewModel.FAVORITES_CATEGORY_ID &&
+                            isFavorite && removal.removed(item.id)
+                        viewModel.toggleFavorite(item.id)
+                        // Not leaving Favorites: the same poster takes focus back right away.
+                        if (!leavesFavorites) gridFocusTick++
                     },
                 )
+                if (target.inContinue) {
+                    HtMenuItem(
+                        label = "Remove from Continue watching",
+                        icon = Icons.Filled.Close,
+                        onClick = {
+                            viewModel.removeFromContinue(item.id)
+                            itemMenu = null
+                            gridFocusTick++
+                        },
+                    )
+                }
             }
         }
 
@@ -561,6 +611,20 @@ internal fun catalogRailEntries(
     }
 }
 
+/**
+ * Whether an empty grid for [selected] is the real answer. Rows that join the provider catalog
+ * (All, Recently added, a category, Continue watching, and Favorites while favorites exist) land
+ * after a cold start's first empty answer, so they wait for the refresh to settle
+ * ([categoriesLoaded], F-60). An empty Favorites grid is final at once only when the favorites
+ * table itself is empty ([favoritesKnownEmpty], #235); a restore can leave favorites waiting on
+ * a catalog that has not landed.
+ */
+internal fun emptyAnswerIsFinal(selected: String, categoriesLoaded: Boolean, favoritesKnownEmpty: Boolean = false): Boolean =
+    categoriesLoaded || (selected == CatalogViewModel.FAVORITES_CATEGORY_ID && favoritesKnownEmpty)
+
+/** #232: the poster a hold-OK menu belongs to, with its bounds for placing the menu beside it. */
+internal data class CatalogMenuTarget(val item: CatalogItem, val anchor: ArtRect?, val inContinue: Boolean)
+
 private fun categoryLabel(selected: String, isMovies: Boolean, categories: List<Category>): String = when (selected) {
     CatalogViewModel.CONTINUE_CATEGORY_ID -> "Continue watching"
     CatalogViewModel.FAVORITES_CATEGORY_ID -> "Favorites"
@@ -596,7 +660,7 @@ private fun PosterGrid(
     focusItemId: String?,
     gridFocus: FocusRequester,
     onOpen: (CatalogItem) -> Unit,
-    onLongPress: (CatalogItem) -> Unit,
+    onLongPress: (CatalogItem, ArtRect?) -> Unit,
     onLeftEdge: () -> Unit,
     onLoadMore: () -> Unit,
 ) {
@@ -647,7 +711,7 @@ private fun PosterGrid(
                     firstColumn = index % COLUMNS == 0,
                     onLeftEdge = onLeftEdge,
                     onClick = { onOpen(item) },
-                    onLongClick = { onLongPress(item) },
+                    onLongClick = { onLongPress(item, it) },
                 )
             }
         }
@@ -657,7 +721,7 @@ private fun PosterGrid(
 /**
  * One poster (compact): the art is the focus target; the caption (title over two lines, the year
  * after it) sits below on the screen background. The favorite star is top right, the quality
- * badge and the episode chip top left. Long-press OK toggles the star. The ring is the only focus
+ * badge and the episode chip top left. Holding OK (or the Menu key) opens the favorites menu. The ring is the only focus
  * change: nothing resizes or moves.
  */
 @Composable
@@ -670,17 +734,19 @@ private fun PosterCard(
     firstColumn: Boolean,
     onLeftEdge: () -> Unit,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (ArtRect?) -> Unit,
 ) {
     val d = browseDesign()
     val type = browseType()
     var focused by remember { mutableStateOf(false) }
+    val anchorHolder = remember { MenuAnchorHolder() }
     Column(modifier = Modifier.width(d.px(widthPx))) {
     Box(
         modifier = Modifier
             .size(width = d.px(widthPx), height = d.px(heightPx))
             // The caption is outside the focus target: the title still names it for TalkBack and QA.
             .semantics { contentDescription = item.name }
+            .onGloballyPositioned { anchorHolder.coordinates = it }
             // FocusRequester BEFORE the clickable surface (see HtvFocus.kt).
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .then(
@@ -702,7 +768,7 @@ private fun PosterCard(
                 radiusPx = CARD_RADIUS_PX,
                 background = HappyTvColors.Surface,
                 onClick = onClick,
-                onLongClick = onLongClick,
+                onLongClick = { onLongClick(anchorHolder.coordinates.toArtRect(d)) },
             ),
     ) {
         HtPosterImage(
@@ -818,7 +884,7 @@ private fun EmptyGridMessage(selected: String, isMovies: Boolean, label: String,
     val unit = if (isMovies) "movies" else "shows"
     val (heading, body) = when (selected) {
         CatalogViewModel.FAVORITES_CATEGORY_ID ->
-            "No favorite $unit yet" to "Hold OK on a poster to add a star."
+            "No favorite $unit yet" to "Hold OK on a poster to add it to favorites."
         CatalogViewModel.CONTINUE_CATEGORY_ID ->
             "Nothing to continue" to "Start a title and it shows up here."
         CatalogViewModel.RECENT_CATEGORY_ID ->

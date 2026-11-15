@@ -38,7 +38,6 @@ class LoginFieldsAccessibilityTest {
                         onSubmit = {},
                         onRetry = {},
                         onChangeServer = {},
-                        onM3uPressed = {},
                         onOpenUrlFormats = {},
                         onCloseUrlFormats = {},
                         onPickUrlFormat = {},

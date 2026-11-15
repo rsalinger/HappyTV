@@ -2,6 +2,7 @@
 
 package com.rysal.happytv.security
 
+import com.rysal.happytv.crash.ReportRedactor
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
@@ -89,6 +90,7 @@ class SecuredCredentialsStore internal constructor(
             Log.e(TAG, "Failed to persist credentials to $PREFS_FILE_NAME (disk full?)")
         }
         ChannelLogoGuard.update(username, password)
+        ReportRedactor.knownHost = host
     }
 
     /**
@@ -111,6 +113,7 @@ class SecuredCredentialsStore internal constructor(
             return@withContext null
         }
         ChannelLogoGuard.update(p.getString(KEY_USERNAME, null), p.getString(KEY_PASSWORD, null))
+        ReportRedactor.knownHost = host
         Credentials(
             host = host,
             port = p.getInt(KEY_PORT, 0),
@@ -151,6 +154,7 @@ class SecuredCredentialsStore internal constructor(
         // in this file, and "wipe" must mean "wipe".
         prefs.edit().clear().commit()
         ChannelLogoGuard.update(null, null)
+        ReportRedactor.knownHost = null
         Unit
     }
 

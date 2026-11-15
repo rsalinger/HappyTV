@@ -23,6 +23,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import com.rysal.happytv.ui.player.BackKeyGate
+import com.rysal.happytv.ui.player.ChannelListSource
+import com.rysal.happytv.ui.player.ChannelNeighbours
+import com.rysal.happytv.ui.player.LiveChannelStepper
+import com.rysal.happytv.ui.player.playerRepository
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.rysal.happytv.data.Graph
 import com.rysal.happytv.data.LiveTvView
@@ -67,8 +71,9 @@ internal fun LiveTvPlaybackLayer(
     val d = browseDesign()
     val mode by host.modeFlow.collectAsStateWithLifecycle()
     val playingId by host.playingStreamIdFlow.collectAsStateWithLifecycle()
-    val playerState by playerViewModel.state.collectAsStateWithLifecycle()
-    val buffering = (playerState as? PlayerUiState.Ready)?.content?.isBuffering == true
+    // #239: only isBuffering, so the 1 s position tick does not recompose the screen below.
+    val buffering by playerViewModel.isBuffering.collectAsStateWithLifecycle()
+    val liveTvStartRoute = remember { BrowseStartRoute.liveTv() }
 
     val playingIdState = rememberUpdatedState(playingId)
     val modeState = rememberUpdatedState(mode)
@@ -77,11 +82,17 @@ internal fun LiveTvPlaybackLayer(
         self = LivePlayback(
             playingStreamIdProvider = { playingIdState.value },
             onPlayChannel = { streamId ->
+                // #224: the list the viewer picked from is what channel up/down walks.
+                val list = self.channelList
+                self.channelList = ChannelListSource.OwnCategory
                 when (PlayerPolicy.channelOk(host.mode, host.playingStreamId, streamId)) {
-                    ChannelOkAction.EnterFull -> host.enterFull()
+                    ChannelOkAction.EnterFull -> {
+                        host.channelList = list
+                        host.enterFull()
+                    }
                     ChannelOkAction.PlayFull -> {
                         self.jumpToPlayingOnBack = false
-                        host.play(PlayerLaunch.live(streamId = streamId))
+                        host.play(PlayerLaunch.live(streamId = streamId), list)
                     }
                 }
             },
@@ -132,7 +143,7 @@ internal fun LiveTvPlaybackLayer(
                 .focusProperties { canFocus = mode != HostMode.Full },
         ) {
             BrowseNavHost(
-                startRoute = BrowseStartRoute.liveTv(),
+                startRoute = liveTvStartRoute,
                 onExit = onExit,
                 onRefreshLive = onRefreshLive,
                 liveTvStartView = startView,
@@ -162,6 +173,19 @@ internal fun LiveTvPlaybackLayer(
                 host = host,
                 playerViewModel = playerViewModel,
                 onBackPressed = routeBack,
+                onPlayRecent = { streamId ->
+                    // #220: the same zap as OK on a channel; the list jumps to it when Back returns.
+                    playerViewModel.recordWatched(streamId)
+                    livePlayback.jumpToPlayingOnBack = true
+                    // The pick keeps the list the viewer came from (#224).
+                    host.play(PlayerLaunch.live(streamId = streamId), host.channelList)
+                },
+                onTuneStep = { streamId ->
+                    // #224: a channel reached by Up/Down counts as watched after 10 s of playing, not at once.
+                    livePlayback.jumpToPlayingOnBack = true
+                    host.play(PlayerLaunch.live(streamId = streamId), host.channelList)
+                    playerViewModel.recordWatchedAfterPlaying()
+                },
                 onStopFromCard = {
                     val id = host.playingStreamId
                     host.stopPlayback()
@@ -177,8 +201,22 @@ private fun FullScreenPlayer(
     host: PlaybackHost,
     playerViewModel: PlayerViewModel,
     onBackPressed: (longPress: Boolean) -> Unit,
+    onPlayRecent: (streamId: String) -> Unit,
+    onTuneStep: (streamId: String) -> Unit,
     onStopFromCard: () -> Unit,
 ) {
+    val stepper = remember(host) {
+        val db = Graph.database
+        val neighbours = ChannelNeighbours(db.liveStreamDao(), db.favoriteDao(), db.hiddenChannelDao())
+        val repository = Graph.playerRepository()
+        LiveChannelStepper(
+            neighbours = neighbours,
+            nowNext = repository::nowNext,
+            playing = { host.playingStreamId },
+            list = { host.channelList },
+            onTune = { onTuneStep(it) },
+        )
+    }
     val canvasFocus = remember { FocusRequester() }
     var playerHasFocus by remember { mutableStateOf(false) }
     // Entering Full, and whenever the focused control goes (the controls fade), the
@@ -195,6 +233,8 @@ private fun FullScreenPlayer(
             onLongBack = { onBackPressed(true) },
             onBackToChannels = onStopFromCard,
             canvasFocus = canvasFocus,
+            onPlayRecent = onPlayRecent,
+            channelStepper = stepper,
         )
     }
 }

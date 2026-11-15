@@ -15,6 +15,17 @@ plugins {
 fun signingProperty(name: String): String? =
     providers.gradleProperty(name).orNull ?: System.getenv(name)
 
+// #259: the short commit the build was made from, shown in local crash reports.
+// "unknown" when git is not available (a source archive).
+val gitShortSha: String = try {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+} catch (e: Exception) {
+    "unknown"
+}
+
 android {
     namespace = "com.rysal.happytv"
     compileSdk = 34
@@ -23,10 +34,9 @@ android {
         applicationId = "com.rysal.happytv"
         minSdk = 23
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = 2
+        versionName = "1.1.0"
+        buildConfigField("String", "GIT_SHA", "\"$gitShortSha\"")
     }
 
     // Release signing. The keystore and its two passwords live OUTSIDE the
@@ -148,16 +158,12 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
-    implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     // Material Icons Extended — Material Symbols for the dashboard tile,
     // status pill and second-row card icons.
     implementation(libs.material.icons.extended)
-    // Compose for TV — Surface, Card, Carousel, Button + D-pad focus ring.
-    implementation(libs.tv.material)
     // Compose Navigation — the browse NavHost (Live TV / Movies / Shows).
     implementation(libs.navigation.compose)
-    debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.core.ktx)
     // Android 12+ splash (compat back to API 23) — LoginActivity's launch flash.
@@ -177,7 +183,6 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.media3.ui)
-    implementation(libs.media3.session)
 
     // Coil — image loading for poster art on the Movies / Shows rails (F-49).
     // `AsyncImage` accepts the HTTPS `stream_icon` URLs panels return; the
@@ -218,10 +223,10 @@ dependencies {
     testImplementation(libs.work.testing)
     // Canned-JSON XtreamApi test (app/src/test/.../XtreamApiMockWebServerTest).
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.okhttp.tls)
     // Dispatchers.setMain / UnconfinedTestDispatcher for the ViewModel tests.
     testImplementation(libs.kotlinx.coroutines.test)
-    // ApplicationProvider/AndroidJUnit4 for the Robolectric Room tests (test scope —
-    // androidTest scope already has it below).
+    // ApplicationProvider/AndroidJUnit4 for the Robolectric Room tests.
     testImplementation(libs.androidx.junit)
     // Compose UI tests on the JVM (Robolectric) — LoginScreenImeHandoffTest drives
     // the sign-in card's Gboard Next/Done hand-off end to end. The BOM resolves
@@ -231,6 +236,4 @@ dependencies {
     testImplementation(platform(libs.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)
     debugImplementation(libs.compose.ui.test.manifest)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
 }

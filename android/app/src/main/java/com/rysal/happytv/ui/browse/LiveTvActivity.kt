@@ -122,6 +122,8 @@ class LiveTvActivity : ComponentActivity() {
         // Consumed: a later onStart/recreate must not replay it.
         intent.removeExtra(PlayerLaunch.EXTRA_STREAM_ID)
         host.play(launch)
+        // #223: a Search pick counts as watched after 10 s of playing; leaving earlier records nothing.
+        playerViewModel.recordWatchedAfterPlaying()
     }
 
     /**

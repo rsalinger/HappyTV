@@ -22,6 +22,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.rysal.happytv.RoomTestTeardown
 import com.rysal.happytv.data.HappyTvDatabase
+import com.rysal.happytv.ui.focus.tryRequest
 import com.rysal.happytv.ui.guide.GuideViewModel
 import com.rysal.happytv.data.entity.Category
 import com.rysal.happytv.data.entity.LiveStream
@@ -284,7 +285,7 @@ class LiveTvBackHandlerTest {
         val detached = FocusRequester() // never backed by a composed row
         assertFalse(
             "requestFocus() on a detached requester must report failure, not throw",
-            detached.tryRequestFocus(),
+            detached.tryRequest(),
         )
     }
 
@@ -541,6 +542,9 @@ class LiveTvBackHandlerTest {
         startScreen(firstNumber = 12_300)
 
         awaitFocus(row("Channel 00"), "the first favorite channel")
+        // Favorites shows its own positions (#221); the provider's number is shown in All channels.
+        vm.selectCategory(LiveCategorySelection.AllChannels)
+        compose.waitUntil(WAIT_MILLIS) { nodeExists(hasText("12300")) }
         val number = compose.onNode(hasText("12300"), useUnmergedTree = true).fetchSemanticsNode()
         val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
         number.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results)

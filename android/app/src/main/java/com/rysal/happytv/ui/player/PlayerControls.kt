@@ -103,13 +103,16 @@ fun PlayerTopGradient() {
  * soft fade above the controls, so the picture stays visible above them.
  */
 @Composable
-fun PlayerBottomGradient() {
+fun PlayerBottomGradient(
+    heightPx: Int = PlayerScrim.BOTTOM_HEIGHT_PX,
+    fadePx: Int = PlayerScrim.BOTTOM_FADE_PX,
+) {
     val d = LocalHappyTvDesign.current
-    val fade = PlayerScrim.BOTTOM_FADE_PX.toFloat() / PlayerScrim.BOTTOM_HEIGHT_PX
+    val fade = fadePx.toFloat() / heightPx
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(d.px(PlayerScrim.BOTTOM_HEIGHT_PX))
+            .height(d.px(heightPx))
             .background(
                 Brush.verticalGradient(
                     colorStops = arrayOf(

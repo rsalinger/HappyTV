@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -53,8 +55,59 @@ class PlayerViewModel(
 
     private var loadJob: Job? = null
 
+    private val _recentChannels = MutableStateFlow<List<RecentChannelCard>>(emptyList())
+
+    /** #220: the cards of the recent channels row for the live channel playing now; empty for movies and when none qualify. */
+    val recentChannels: StateFlow<List<RecentChannelCard>> = _recentChannels.asStateFlow()
+
+    private var recentsJob: Job? = null
+
+    /** #223: records a live channel started outside Live TV's lists once it has played 10 s. */
+    private val watchTimer = PlayedChannelTimer(viewModelScope, clock, ::recordWatched)
+
+    /**
+     * Counts the live channel now loading as watched after 10 s of playing (#223): Search and the
+     * player screen call this; Live TV's own lists record on OK instead. A zap or stop disarms it.
+     */
+    fun recordWatchedAfterPlaying() {
+        if (current.streamType == StreamType.LIVE && !current.isReplay && current.streamId.isNotEmpty()) {
+            watchTimer.arm(current.streamId)
+        }
+    }
+
     private val _state = MutableStateFlow<PlayerUiState>(PlayerUiState.Loading)
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+
+    /**
+     * #239: [state] without the per-second scrubber facts. `progress` and `badge` of a ready
+     * state are held at [PlayerProgress.Untracked] / null, so a position tick leaves this equal
+     * and Compose skips every reader. Draw the scrubber and badge from [tick]; code that needs
+     * the real values at an event reads [state].
+     */
+    val uiState: StateFlow<PlayerUiState> = DerivedStateFlow(_state) { st ->
+        if (st is PlayerUiState.Ready) {
+            PlayerUiState.Ready(st.content.copy(progress = PlayerProgress.Untracked, badge = null))
+        } else {
+            st
+        }
+    }
+
+    /** #239: the progress and badge of the current content, the only thing the 1 s tick changes. */
+    val tick: StateFlow<PlayerTick?> = DerivedStateFlow(_state) { st ->
+        val content = when (st) {
+            is PlayerUiState.Ready -> st.content
+            is PlayerUiState.Offline -> st.content
+            is PlayerUiState.UnsupportedFormat -> st.content
+            is PlayerUiState.InsecureRedirect -> st.content
+            else -> null
+        }
+        content?.let { PlayerTick(it.progress, it.badge) }
+    }
+
+    /** #239: for the Live TV layer, which only dims the picture while buffering. */
+    val isBuffering: StateFlow<Boolean> = DerivedStateFlow(_state) { st ->
+        (st as? PlayerUiState.Ready)?.content?.isBuffering == true
+    }
 
     private val _message = MutableStateFlow<String?>(null)
     /** Transient snackbar line ("Retrying…"); the UI auto-dismisses it. */
@@ -152,6 +205,7 @@ class PlayerViewModel(
      * first one, so activities that start with one launch are unchanged.
      */
     fun start(newLaunch: PlayerLaunch) {
+        watchTimer.cancel()
         current = newLaunch
         progressTarget = null
         upNextTarget = null
@@ -161,6 +215,8 @@ class PlayerViewModel(
         streamErrorTimes.clear()
         windowStartUtcMillis = 0L
         windowEndUtcMillis = 0L
+        recentsJob?.cancel()
+        _recentChannels.value = emptyList()
         load()
     }
 
@@ -170,8 +226,11 @@ class PlayerViewModel(
      * rebuilt from a stale target.
      */
     fun stop() {
+        watchTimer.cancel()
         loadJob?.cancel()
         loadJob = null
+        recentsJob?.cancel()
+        _recentChannels.value = emptyList()
         current = IDLE_LAUNCH
         progressTarget = null
         upNextTarget = null
@@ -382,6 +441,7 @@ class PlayerViewModel(
                 isBuffering = true,
             ),
         )
+        refreshRecentChannels()
     }
 
     private suspend fun loadVod(conn: PlayerConnection) {
@@ -391,10 +451,20 @@ class PlayerViewModel(
             _state.value = PlayerUiState.StreamNotFound
             return
         }
-        // Protocol §3.2: a non-blank `direct_source` IS the play URL — build
-        // the standard `/movie/{user}/{pass}/{id}.{ext}` only for rows without
-        // one (F-51: the app ignored this override entirely).
-        val direct = vod.directSource?.takeIf { it.isNotBlank() }
+        // Protocol §3.2: a usable `direct_source` IS the play URL (F-51). Usable means an http(s)
+        // address that does not put the sign-in details on a plain-HTTP link (#238); otherwise the
+        // standard `/movie/{user}/{pass}/{id}.{ext}` is built, as for rows without one.
+        val directCheck = DirectLinkPolicy.check(
+            raw = vod.directSource,
+            signInIsHttps = conn.useTls,
+            username = conn.username,
+            password = conn.password,
+            override = { repository.allowSignInOverUnencrypted() },
+        )
+        if (!vod.directSource.isNullOrBlank() && directCheck.url == null) {
+            Log.i(TAG, "loadVod: direct link ignored reason=${directCheck.verdict} signInIsHttps=${conn.useTls}")
+        }
+        val direct = directCheck.url
         val extension = PlayerUrlBuilder.movieExtension(vod.containerExtension, current.extension)
         val url = direct ?: PlayerUrlBuilder.movie(
             origin = conn.origin,
@@ -514,6 +584,7 @@ class PlayerViewModel(
     // ------------------------------------------------------- playback facts
 
     fun onIsPlayingChanged(isPlaying: Boolean) {
+        watchTimer.onPlaying(isPlaying && !awaitingNewMedia)
         if (isPlaying && !awaitingNewMedia) {
             if (playingSinceMillis == null) playingSinceMillis = clock()
         } else {
@@ -598,6 +669,7 @@ class PlayerViewModel(
      */
     fun onStreamError(error: Throwable? = null, errorCode: Int? = null) {
         val now = clock()
+        watchTimer.onFailure()
         Log.w(TAG, "onStreamError: error=$error errorCode=$errorCode " +
             "errors=${streamErrorTimes.size}")
         val failure = PlayerErrorClassifier.classify(errorCode, error)
@@ -704,7 +776,45 @@ class PlayerViewModel(
         }
     }
 
-    /** Up/Down and the info button — toggle Now/Next without pausing playback. */
+    /** Opening the recent channels row closes the Now/Next card (#220). */
+    fun hideProgramInfo() {
+        updateContent { content -> if (content.showProgramInfo) content.copy(showProgramInfo = false) else content }
+    }
+
+    /** Marks [streamId] as watched now (a pick from the recent channels row), so the channel left is first next time. */
+    fun recordWatched(streamId: String) {
+        viewModelScope.launch {
+            try {
+                repository.recordWatch(streamId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "recordWatched failed: ${e::class.simpleName}")
+            }
+        }
+    }
+
+    /** Loads the recent channels row for the live channel now playing (Room runs the queries off the main thread). */
+    private fun refreshRecentChannels() {
+        recentsJob?.cancel()
+        if (current.streamType != StreamType.LIVE) {
+            _recentChannels.value = emptyList()
+            return
+        }
+        val playing = current.streamId
+        recentsJob = viewModelScope.launch {
+            _recentChannels.value = try {
+                repository.recentChannels(playing, clock())
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "recentChannels failed: ${e::class.simpleName}")
+                emptyList()
+            }
+        }
+    }
+
+    /** The info button (and Up on replay) toggles Now/Next without pausing playback; live Up/Down step channels (#224). */
     fun toggleProgramInfo() {
         updateContent { content ->
             if (content.nowNext == null) content else content.copy(showProgramInfo = !content.showProgramInfo)
@@ -1113,9 +1223,37 @@ data class PlayerProgress(
     /** Movie runtime facts (used by the leave-confirmation); 0 elsewhere. */
     val positionMillis: Long = 0L,
     val durationMillis: Long = 0L,
-)
+) {
+    companion object {
+        /** What [PlayerViewModel.uiState] carries in place of the ticking progress (#239). */
+        val Untracked = PlayerProgress(
+            startLabel = null, endLabel = null, fillFraction = 0f, bufferedFraction = 0f,
+            liveEdgeFraction = null, dot = ScrubberDot.Cream,
+        )
+    }
+}
 
 enum class ScrubberDot { PulsingRed, Cream }
+
+/** The scrubber and badge snapshot that changes every second while playing (#239). */
+data class PlayerTick(val progress: PlayerProgress, val badge: PlayerBadge?)
+
+/**
+ * A read-only view of [source] through [transform]: `value` is computed on read and collectors
+ * only see changes of the transformed value, so a source change that maps to an equal value
+ * emits nothing. Synchronous like the source, which a `stateIn` would not be under test dispatchers.
+ */
+private class DerivedStateFlow<T, R>(
+    private val source: StateFlow<T>,
+    private val transform: (T) -> R,
+) : StateFlow<R> {
+    override val value: R get() = transform(source.value)
+    override val replayCache: List<R> get() = listOf(value)
+    override suspend fun collect(collector: kotlinx.coroutines.flow.FlowCollector<R>): Nothing {
+        source.map(transform).distinctUntilChanged().collect(collector)
+        throw IllegalStateException("StateFlow collect never completes")
+    }
+}
 
 /** The right-hand badge next to the scrubber. */
 data class PlayerBadge(val kind: BadgeKind, val text: String)

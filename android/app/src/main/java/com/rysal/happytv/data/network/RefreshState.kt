@@ -63,9 +63,6 @@ data class RefreshProgress(
         StreamType.SERIES -> copy(series = state)
     }
 
-    val hasError: Boolean
-        get() = live is RefreshState.Error || vod is RefreshState.Error || series is RefreshState.Error
-
     /** Total rows across every tile that finished successfully. */
     val doneChannels: Int
         get() = listOf(live, vod, series).filterIsInstance<RefreshState.Done>().sumOf { it.channels }

@@ -19,6 +19,8 @@ import com.rysal.happytv.security.EpgOverrideStore
 import com.rysal.happytv.security.InMemoryEpgOverrideStore
 import com.rysal.happytv.ui.player.PlayerUrlBuilder
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -103,8 +105,6 @@ data class AppSettings(
     val epgPastDaysToKeep: Int = 7,
     /** Playback container: `"m3u8"` (HLS) or `"ts"` (MPEG-TS). */
     val preferredStreamFormat: String = "m3u8",
-    /** Offer timeshift/catch-up controls on live channels that support it. */
-    val catchupEnabled: Boolean = true,
     /**
      * design spec §"Settings > Player": "Start replays from the beginning" — open a
      * replayable channel's program from its start instead of live. Off by
@@ -174,7 +174,6 @@ data class AppSettings(
             epgRefreshHours == other.epgRefreshHours &&
             epgPastDaysToKeep == other.epgPastDaysToKeep &&
             preferredStreamFormat == other.preferredStreamFormat &&
-            catchupEnabled == other.catchupEnabled &&
             replayFromStart == other.replayFromStart &&
             aspectRatio == other.aspectRatio &&
             liveTvOpenOn == other.liveTvOpenOn &&
@@ -200,7 +199,6 @@ data class AppSettings(
         result = 31 * result + epgRefreshHours
         result = 31 * result + epgPastDaysToKeep
         result = 31 * result + preferredStreamFormat.hashCode()
-        result = 31 * result + catchupEnabled.hashCode()
         result = 31 * result + replayFromStart.hashCode()
         result = 31 * result + aspectRatio.hashCode()
         result = 31 * result + liveTvOpenOn.hashCode()
@@ -224,7 +222,7 @@ data class AppSettings(
     override fun toString(): String =
         "AppSettings(refreshOnStart=$refreshOnStart, epgUrl=${epgUrl?.let { PlayerUrlBuilder.redactCredentials(it) }}, epgRefreshHours=$epgRefreshHours, " +
             "epgPastDaysToKeep=$epgPastDaysToKeep, preferredStreamFormat=$preferredStreamFormat, " +
-            "catchupEnabled=$catchupEnabled, replayFromStart=$replayFromStart, aspectRatio=$aspectRatio, " +
+            "replayFromStart=$replayFromStart, aspectRatio=$aspectRatio, " +
             "liveTvOpenOn=$liveTvOpenOn, keepCategoriesOpen=$keepCategoriesOpen, backWhileWatching=$backWhileWatching, allowSignInOverUnencrypted=$allowSignInOverUnencrypted, backupHousehold=$backupHousehold, " +
             "lastLiveRefreshUtcMillis=$lastLiveRefreshUtcMillis, lastVodRefreshUtcMillis=$lastVodRefreshUtcMillis, " +
             "lastSeriesRefreshUtcMillis=$lastSeriesRefreshUtcMillis, lightMode=$lightMode, " +
@@ -336,8 +334,6 @@ class SettingsRepository(
         edit { it[KEY_PREFERRED_STREAM_FORMAT] = value }
     }
 
-    suspend fun setCatchupEnabled(value: Boolean) = edit { it[KEY_CATCHUP_ENABLED] = value }
-
     suspend fun setReplayFromStart(value: Boolean) = edit { it[KEY_REPLAY_FROM_START] = value }
 
     suspend fun setAspectRatio(value: String) {
@@ -372,7 +368,6 @@ class SettingsRepository(
             epgRefreshHours = p[KEY_EPG_REFRESH_HOURS],
             epgPastDaysToKeep = p[KEY_EPG_PAST_DAYS_TO_KEEP],
             preferredStreamFormat = p[KEY_PREFERRED_STREAM_FORMAT],
-            catchupEnabled = p[KEY_CATCHUP_ENABLED],
             replayFromStart = p[KEY_REPLAY_FROM_START],
             aspectRatio = p[KEY_ASPECT_RATIO],
             liveTvOpenOn = p[KEY_LIVE_TV_OPEN_ON],
@@ -382,34 +377,46 @@ class SettingsRepository(
         )
     }
 
-    /** #19: restores [restored] for settings the user has not set yet; never overwrites a set one. Invalid values are skipped. */
-    suspend fun importHouseholdSettings(restored: HouseholdSettings) = edit { p ->
-        fun <T> fill(key: Preferences.Key<T>, value: T?, valid: Boolean = true) {
-            if (value != null && valid && p[key] == null) p[key] = value
+    /** #216: every backed-up setting's effective value: the stored one, or the app default when unset. Nothing is null. */
+    suspend fun effectiveHouseholdSettings(): HouseholdSettings = withDefaults(householdSettingsSnapshot())
+
+    /**
+     * #19: restores [restored] for settings the user has not set yet; never overwrites a set one.
+     * Invalid values are skipped (see [sanitizeHouseholdSettings]).
+     */
+    suspend fun importHouseholdSettings(restored: HouseholdSettings) {
+        val clean = sanitizeHouseholdSettings(restored)
+        edit { p -> writeHouseholdSettings(p, clean, overwrite = false) }
+    }
+
+    /**
+     * #209: a local restore replaces. Each setting the file carries (and that is in range) is
+     * written over the current value; a setting the file does not carry, or carries out of range,
+     * goes back to its default. One DataStore edit, so it is all or nothing.
+     */
+    suspend fun replaceHouseholdSettings(restored: HouseholdSettings) {
+        val clean = sanitizeHouseholdSettings(restored)
+        edit { p -> writeHouseholdSettings(p, clean, overwrite = true) }
+    }
+
+    private fun writeHouseholdSettings(p: MutablePreferences, s: HouseholdSettings, overwrite: Boolean) {
+        fun <T> put(key: Preferences.Key<T>, value: T?) {
+            if (overwrite) {
+                if (value != null) p[key] = value else p.remove(key)
+            } else if (value != null && p[key] == null) {
+                p[key] = value
+            }
         }
-        fill(KEY_REFRESH_ON_START, restored.refreshOnStart)
-        fill(KEY_EPG_REFRESH_HOURS, restored.epgRefreshHours, (restored.epgRefreshHours ?: 0) > 0)
-        fill(KEY_EPG_PAST_DAYS_TO_KEEP, restored.epgPastDaysToKeep, (restored.epgPastDaysToKeep ?: -1) >= 0)
-        fill(
-            KEY_PREFERRED_STREAM_FORMAT,
-            restored.preferredStreamFormat,
-            restored.preferredStreamFormat == FORMAT_M3U8 || restored.preferredStreamFormat == FORMAT_TS,
-        )
-        fill(KEY_CATCHUP_ENABLED, restored.catchupEnabled)
-        fill(KEY_REPLAY_FROM_START, restored.replayFromStart)
-        fill(
-            KEY_ASPECT_RATIO,
-            restored.aspectRatio,
-            restored.aspectRatio == ASPECT_AUTO || restored.aspectRatio == ASPECT_16_9 || restored.aspectRatio == ASPECT_4_3,
-        )
-        fill(KEY_LIVE_TV_OPEN_ON, restored.liveTvOpenOn, LiveTvOpenOn.entries.any { it.stored == restored.liveTvOpenOn })
-        fill(KEY_KEEP_CATEGORIES_OPEN, restored.keepCategoriesOpen)
-        fill(KEY_LIGHT_MODE, restored.lightMode)
-        fill(
-            KEY_BACK_WHILE_WATCHING,
-            restored.backWhileWatching,
-            BackWhileWatching.entries.any { it.stored == restored.backWhileWatching },
-        )
+        put(KEY_REFRESH_ON_START, s.refreshOnStart)
+        put(KEY_EPG_REFRESH_HOURS, s.epgRefreshHours)
+        put(KEY_EPG_PAST_DAYS_TO_KEEP, s.epgPastDaysToKeep)
+        put(KEY_PREFERRED_STREAM_FORMAT, s.preferredStreamFormat)
+        put(KEY_REPLAY_FROM_START, s.replayFromStart)
+        put(KEY_ASPECT_RATIO, s.aspectRatio)
+        put(KEY_LIVE_TV_OPEN_ON, s.liveTvOpenOn)
+        put(KEY_KEEP_CATEGORIES_OPEN, s.keepCategoriesOpen)
+        put(KEY_BACK_WHILE_WATCHING, s.backWhileWatching)
+        put(KEY_LIGHT_MODE, s.lightMode)
     }
 
     /** #126: the dashboard's light/dark switch. */
@@ -448,7 +455,6 @@ class SettingsRepository(
         prefs.remove(KEY_EPG_URL)
         prefs.remove(KEY_EPG_REFRESH_HOURS)
         prefs.remove(KEY_PREFERRED_STREAM_FORMAT)
-        prefs.remove(KEY_CATCHUP_ENABLED)
         prefs.remove(KEY_REPLAY_FROM_START)
         prefs.remove(KEY_ASPECT_RATIO)
         prefs.remove(KEY_LIVE_TV_OPEN_ON)
@@ -486,6 +492,32 @@ class SettingsRepository(
         if (value == null) prefs.remove(KEY_USER_INFO) else prefs[KEY_USER_INFO] = value
     }
 
+    /**
+     * #212 migration: builds before this fix cached the whole `user_info`
+     * response, username and password included, in plain settings. Rewrites an
+     * existing blob down to the cache-safe shape; an unreadable blob is dropped
+     * (the next sign-in or refresh recaches it). Idempotent; returns true when
+     * something changed.
+     */
+    suspend fun scrubCachedUserInfo(): Boolean {
+        var changed = false
+        // Read, transform and write in one edit so a concurrent sign-in cannot
+        // be overwritten with a slim copy of the stale blob.
+        edit { prefs ->
+            val raw = prefs[KEY_USER_INFO] ?: return@edit
+            val slim = runCatching {
+                val dto = scrubJson.decodeFromString<com.rysal.happytv.data.network.UserInfoDto>(raw.decodeToString())
+                scrubJson.encodeToString(dto.forCache()).toByteArray(Charsets.UTF_8)
+            }.getOrNull()
+            if (slim != null && slim.contentEquals(raw)) return@edit
+            if (slim == null) prefs.remove(KEY_USER_INFO) else prefs[KEY_USER_INFO] = slim
+            changed = true
+        }
+        return changed
+    }
+
+    private val scrubJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; coerceInputValues = true }
+
     private suspend fun edit(block: suspend (MutablePreferences) -> Unit) = dataStore.edit(block)
 
     private fun Preferences.toAppSettings(): AppSettings = AppSettings(
@@ -494,7 +526,6 @@ class SettingsRepository(
         epgRefreshHours = this[KEY_EPG_REFRESH_HOURS] ?: DEFAULT_EPG_REFRESH_HOURS,
         epgPastDaysToKeep = this[KEY_EPG_PAST_DAYS_TO_KEEP] ?: 7,
         preferredStreamFormat = this[KEY_PREFERRED_STREAM_FORMAT] ?: FORMAT_M3U8,
-        catchupEnabled = this[KEY_CATCHUP_ENABLED] ?: true,
         replayFromStart = this[KEY_REPLAY_FROM_START] ?: false,
         aspectRatio = this[KEY_ASPECT_RATIO] ?: ASPECT_AUTO,
         liveTvOpenOn = LiveTvOpenOn.fromStored(this[KEY_LIVE_TV_OPEN_ON]),
@@ -527,6 +558,43 @@ class SettingsRepository(
         /** design spec §"Settings > Guide": "Update the guide every" defaults to 12 hours. */
         const val DEFAULT_EPG_REFRESH_HOURS = 12
 
+        /**
+         * #19/#209: the one range check for settings that arrive from a file. A value that is out
+         * of range becomes null (not set), so the default applies.
+         */
+        fun sanitizeHouseholdSettings(r: HouseholdSettings): HouseholdSettings = r.copy(
+            epgRefreshHours = r.epgRefreshHours?.takeIf { it in 1..MAX_EPG_REFRESH_HOURS },
+            epgPastDaysToKeep = r.epgPastDaysToKeep?.takeIf { it in 0..MAX_EPG_PAST_DAYS },
+            preferredStreamFormat = r.preferredStreamFormat?.takeIf { it == FORMAT_M3U8 || it == FORMAT_TS },
+            aspectRatio = r.aspectRatio?.takeIf { it == ASPECT_AUTO || it == ASPECT_16_9 || it == ASPECT_4_3 },
+            liveTvOpenOn = r.liveTvOpenOn?.takeIf { v -> LiveTvOpenOn.entries.any { it.stored == v } },
+            backWhileWatching = r.backWhileWatching?.takeIf { v -> BackWhileWatching.entries.any { it.stored == v } },
+        )
+
+        /**
+         * #216: [r] with the app default in place of anything unset or out of range, so two
+         * settings compare by what the app would do, not by whether they were ever stored.
+         */
+        fun withDefaults(r: HouseholdSettings): HouseholdSettings {
+            val c = sanitizeHouseholdSettings(r)
+            val d = AppSettings()
+            return HouseholdSettings(
+                refreshOnStart = c.refreshOnStart ?: d.refreshOnStart,
+                epgRefreshHours = c.epgRefreshHours ?: d.epgRefreshHours,
+                epgPastDaysToKeep = c.epgPastDaysToKeep ?: d.epgPastDaysToKeep,
+                preferredStreamFormat = c.preferredStreamFormat ?: d.preferredStreamFormat,
+                replayFromStart = c.replayFromStart ?: d.replayFromStart,
+                aspectRatio = c.aspectRatio ?: d.aspectRatio,
+                liveTvOpenOn = c.liveTvOpenOn ?: d.liveTvOpenOn.stored,
+                keepCategoriesOpen = c.keepCategoriesOpen ?: d.keepCategoriesOpen,
+                backWhileWatching = c.backWhileWatching ?: d.backWhileWatching.stored,
+                lightMode = c.lightMode ?: d.lightMode,
+            )
+        }
+
+        private const val MAX_EPG_REFRESH_HOURS = 24 * 30
+        private const val MAX_EPG_PAST_DAYS = 365
+
         const val ASPECT_AUTO = "auto"
         const val ASPECT_16_9 = "16:9"
         const val ASPECT_4_3 = "4:3"
@@ -536,7 +604,6 @@ class SettingsRepository(
         private val KEY_EPG_REFRESH_HOURS = intPreferencesKey("epg_refresh_hours")
         private val KEY_EPG_PAST_DAYS_TO_KEEP = intPreferencesKey("epg_past_days_to_keep")
         private val KEY_PREFERRED_STREAM_FORMAT = stringPreferencesKey("preferred_stream_format")
-        private val KEY_CATCHUP_ENABLED = booleanPreferencesKey("catchup_enabled")
         private val KEY_REPLAY_FROM_START = booleanPreferencesKey("replay_from_start")
         private val KEY_ASPECT_RATIO = stringPreferencesKey("aspect_ratio")
         private val KEY_LIVE_TV_OPEN_ON = stringPreferencesKey("live_tv_open_on")

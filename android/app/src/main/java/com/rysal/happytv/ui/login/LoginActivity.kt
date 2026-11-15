@@ -134,7 +134,6 @@ class LoginActivity : ComponentActivity() {
                         onSubmit = viewModel::onSubmit,
                         onRetry = viewModel::onRetry,
                         onChangeServer = viewModel::onChangeServer,
-                        onM3uPressed = viewModel::onM3uPressed,
                         onOpenUrlFormats = viewModel::onOpenUrlFormats,
                         onCloseUrlFormats = viewModel::onCloseUrlFormats,
                         onPickUrlFormat = viewModel::onPickUrlFormat,

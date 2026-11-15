@@ -6,19 +6,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Playback foreground service + keeping the screen on while watching -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- targetSdk 34 requires the typed FGS permission for media playback -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- WorkManager's SystemForegroundService (dataSync) runs the guide refresh
-         as a foreground service below API 31 (#200); API 34 needs the typed permission -->
+         as a foreground service below API 31 (#200); API 34 needs the typed permission.
+         There is no playback service: the player lives and dies with its activity. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- WorkManager's wake lock while a refresh runs -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Channel-reminder alarms (wired up when reminders ship, v1.5+) -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <!-- Runtime notification permission (v1.5+) -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Local backups (#210). API 30+: All files access, granted by the user in system settings; it is
+         how a reinstalled app reads its own old backup. API 23 to 29: the storage permission plus
+         requestLegacyExternalStorage on the application. Only the app's own HappyTV folders are used. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
     <!-- TV: leanback is optional (installable on phones too), touchscreen not required -->
     <uses-feature
@@ -31,6 +31,7 @@
     <application
         android:name=".HappyTvApp"
         android:allowBackup="true"
+        android:requestLegacyExternalStorage="true"
         android:backupAgent=".backup.HappyTvBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -93,7 +94,7 @@
             android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|keyboard|keyboardHidden" />
 
         <!-- Search (t_7d608d3c): a modal overlay — the screen behind stays
-             visible through the translucent window and its 70% scrim. -->
+             alive behind the translucent window, under the overlay's own opaque scrim. -->
         <activity
             android:name=".ui.search.SearchActivity"
             android:exported="false"

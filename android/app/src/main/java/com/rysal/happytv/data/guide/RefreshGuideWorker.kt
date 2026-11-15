@@ -151,18 +151,6 @@ class RefreshGuideWorker(
 }
 
 /**
- * Deprecated alias for [RefreshGuideWorker], kept for one release in
- * case an old test still references the pre-rename class. It is a
- * **compile-time** alias only: WorkManager has only ever registered
- * `RefreshGuideWorker`, so no stored work can name this type.
- */
-@Deprecated(
-    "Renamed to RefreshGuideWorker (UI label is Guide; the wire endpoint stays get_short_epg).",
-    ReplaceWith("RefreshGuideWorker"),
-)
-typealias RefreshEpgWorker = RefreshGuideWorker
-
-/**
  * WorkManager wiring for [RefreshGuideWorker].
  *
  *  - [ensureScheduled] — called once per process from

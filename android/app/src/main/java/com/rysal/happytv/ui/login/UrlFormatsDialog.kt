@@ -2,7 +2,6 @@ package com.rysal.happytv.ui.login
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,8 +12,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,16 +20,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import com.rysal.happytv.ui.browse.htvClickableSurface
+import com.rysal.happytv.ui.focus.htvFocusTarget
 import com.rysal.happytv.ui.theme.HappyTvColors
 import com.rysal.happytv.ui.theme.LocalHappyTvDesign
 import com.rysal.happytv.ui.theme.LocalHappyTvTypography
-import com.rysal.happytv.ui.theme.happyTvFocusRing
 import com.rysal.happytv.ui.theme.tabular
 
 /**
@@ -159,35 +152,24 @@ private fun UrlFormatOptionButton(
 ) {
     val d = LocalHappyTvDesign.current
     val typography = LocalHappyTvTypography.current
-    val radius = d.px(OPTION_RADIUS_PX)
-    var focused by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .height(d.px(OPTION_HEIGHT_PX))
             .fillMaxWidth()
-            // Ring first — a clip above it would erase the ring and the glow
-            // (F-33).
-            .happyTvFocusRing(focused = focused, radius = radius)
-            .clip(RoundedCornerShape(radius))
-            .background(HappyTvColors.Overlay)
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            // Before `htvClickableSurface`: a FocusRequester only finds targets after it.
+            .htvFocusTarget(focusRequester)
             .focusProperties {
                 this.up = up
                 this.down = down
                 left = FocusRequester.Cancel
                 right = FocusRequester.Cancel
             }
-            .focusable()
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyUp && event.key == Key.DirectionCenter) {
-                    onClick()
-                    true
-                } else {
-                    false
-                }
-            }
+            .htvClickableSurface(
+                radiusPx = OPTION_RADIUS_PX,
+                background = HappyTvColors.Overlay,
+                onClick = onClick,
+            )
             .padding(horizontal = d.px(OPTION_PADDING_PX)),
         verticalArrangement = Arrangement.Center,
     ) {

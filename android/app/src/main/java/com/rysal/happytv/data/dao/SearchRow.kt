@@ -23,6 +23,8 @@ data class SearchPosterRow(
     val name: String,
     /** Show year ("2023"), or null when the catalog doesn't carry one. */
     val year: String?,
+    /** Provider sort number; Search orders its matches by it (#241). Null sorts first, as in SQLite. */
+    val num: Int? = null,
 )
 
 /**
